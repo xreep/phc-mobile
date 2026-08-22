@@ -4,8 +4,10 @@ import { Card } from '@/components/card';
 import { RiskCard } from '@/components/risk-card';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
-import { RISK_CATEGORIES, VITALS } from '@/constants/health-data';
+import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
+import { useRiskAssessment } from '@/hooks/use-risk-assessment';
+import type { SensorSource } from '@/risk';
 
 function Stat({ value, unit, label }: { value: string; unit: string; label: string }) {
   return (
@@ -23,20 +25,65 @@ function Stat({ value, unit, label }: { value: string; unit: string; label: stri
   );
 }
 
+/** Placeholder for a vital the current reading does not carry. */
+const ABSENT = '—';
+
+/**
+ * Coarse relative age. Rounded to the unit being shown rather than to the nearest
+ * minute throughout, so a 30-second-old reading reads "30s ago" instead of collapsing
+ * to "0 min ago".
+ */
+function formatAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return 'just now';
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  return minutes === 1 ? '1 min ago' : `${minutes} min ago`;
+}
+
+function sourceLabel(source: SensorSource): string {
+  return SENSOR_SOURCES.find((option) => option.key === source)?.label ?? source;
+}
+
 export default function HomeScreen() {
+  const { assessment, latest } = useRiskAssessment();
+
+  // Freshness comes from the timestamp the engine actually evaluated, not from a
+  // hand-written string, so the header cannot claim the cards are more current than they
+  // are.
+  const subtitle =
+    latest === null
+      ? 'Waiting for the first reading'
+      : `Updated ${formatAge(assessment.evaluatedAt - latest.timestamp)} · ${sourceLabel(latest.source)}`;
+
   return (
-    <Screen title="Dashboard" subtitle={`Updated ${VITALS.updatedAt} · Simulated data`}>
+    <Screen title="Dashboard" subtitle={subtitle}>
       <Card>
         <ThemedText type="smallBold">Current vitals</ThemedText>
         <View style={styles.statsRow}>
-          <Stat value={String(VITALS.hr)} unit="bpm" label="Heart rate" />
-          <Stat value={String(VITALS.spo2)} unit="%" label="SpO₂" />
-          <Stat value={VITALS.skinTempC.toFixed(1)} unit="°C" label="Skin temp" />
+          <Stat
+            value={latest?.hr === undefined ? ABSENT : String(Math.round(latest.hr))}
+            unit="bpm"
+            label="Heart rate"
+          />
+          <Stat
+            value={latest?.spo2 === undefined ? ABSENT : String(Math.round(latest.spo2))}
+            unit="%"
+            label="SpO₂"
+          />
+          <Stat
+            value={latest?.skinTempC === undefined ? ABSENT : latest.skinTempC.toFixed(1)}
+            unit="°C"
+            label="Skin temp"
+          />
         </View>
       </Card>
 
       <ThemedText type="smallBold">Risk overview</ThemedText>
-      {RISK_CATEGORIES.map((category) => (
+      {/* Levels, colours, guidance, and metrics all come from the Tier-1 rule engine
+          (PRD §7.2.2) evaluating the reading buffer — `CategoryAssessment` extends the
+          `RiskCategory` shape `RiskCard` already renders, so the card is unchanged. */}
+      {assessment.categories.map((category) => (
         <RiskCard key={category.key} category={category} />
       ))}
 

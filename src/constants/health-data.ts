@@ -10,6 +10,15 @@
 /** Traffic-light status. Subset of the theme's RiskColors keys. */
 export type RiskLevel = 'green' | 'amber' | 'red';
 
+/**
+ * One dashboard risk card.
+ *
+ * The Dashboard no longer holds a hardcoded array of these: the Tier-1 rule engine
+ * (PRD §7.2.2) produces them at runtime as `CategoryAssessment`, which extends this
+ * shape with the score, fired rules, and data quality behind each verdict. This type
+ * stays here because it is the contract `RiskCard` renders against and the engine's only
+ * coupling to the app — see the header of `src/risk/types.ts`.
+ */
 export type RiskCategory = {
   key: 'heat' | 'respiratory' | 'cardiovascular' | 'fall';
   label: string;
@@ -20,50 +29,26 @@ export type RiskCategory = {
   metric?: string;
 };
 
-/** Home dashboard — per-category risk (PRD §7.2.2 rule-engine categories). */
-export const RISK_CATEGORIES: RiskCategory[] = [
-  {
-    key: 'heat',
-    label: 'Heat Stress',
-    level: 'red',
-    guidance: 'Dangerous heat — stay indoors, drink water often, avoid any exertion.',
-    metric: 'Heat index 56°C',
-  },
-  {
-    key: 'respiratory',
-    label: 'Respiratory',
-    level: 'green',
-    guidance: 'Blood oxygen is in the normal range.',
-    metric: 'SpO₂ 97%',
-  },
-  {
-    key: 'cardiovascular',
-    label: 'Cardiovascular',
-    level: 'green',
-    guidance: 'Resting heart rate looks normal.',
-    metric: 'HR 78 bpm',
-  },
-  {
-    key: 'fall',
-    label: 'Fall Detection',
-    level: 'green',
-    guidance: 'No fall or unusual stillness detected.',
-    metric: 'Active',
-  },
-];
-
+/**
+ * Terminal values of the demo sensor window — `mock-sensor-window.ts` builds a rolling
+ * buffer that ends on these, so the vitals row and the engine-computed cards are reading
+ * the same numbers by construction rather than by coincidence.
+ *
+ * There is no `updatedAt` here on purpose. Freshness is a property of the reading
+ * timestamps the engine actually evaluated, so the Dashboard derives it from
+ * `RiskAssessment` instead; a hardcoded string beside live-computed cards is exactly the
+ * kind of claim that goes quietly out of date.
+ */
 export type VitalsSummary = {
   hr: number;
   spo2: number;
   skinTempC: number;
-  updatedAt: string;
 };
 
 export const VITALS: VitalsSummary = {
   hr: 78,
   spo2: 97,
   skinTempC: 36.8,
-  updatedAt: '2 min ago',
 };
 
 export type TrendRange = '24h' | '7d';
