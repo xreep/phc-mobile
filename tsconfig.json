@@ -2,6 +2,11 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // Jest's globals (describe/it/expect) are ambient, so nothing imports them
+    // and TS never pulls @types/jest in on its own. Listing it here is what
+    // type-checks the test files: jest-expo transpiles via Babel and strips
+    // types without checking them, so `tsc --noEmit` is the only gate on tests.
+    "types": ["jest", "expo/types"],
     "paths": {
       "@/*": [
         "./src/*"
