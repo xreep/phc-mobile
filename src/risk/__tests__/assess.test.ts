@@ -778,3 +778,158 @@ describe('empty and degraded input never claims the user is fine', () => {
     expect(result.byCategory.cardiovascular.flagged).toBe(true);
   });
 });
+
+/**
+ * Structural invariants, swept over a grid rather than argued per rule.
+ *
+ * These exist because of a shipped defect no per-rule test caught: the cardiovascular
+ * rule could return `flagged: true` with `level: 'green'`, because the flag was decided
+ * from a sustained run while the score was computed from the newest reading alone. The
+ * card rendered green with a green dot while the engine internally considered the episode
+ * a flag — the single most dangerous output available to it.
+ *
+ * That was not really a tachycardia bug; it was a *consistency* bug, and three other
+ * rules compute a flag and a score by separate routes and could acquire the same one. So
+ * the relationships are asserted for every rule at once, across a cross product of vitals,
+ * motion shapes, and environments. Failures report the offending scenario labels rather
+ * than a bare `false`, so a violation names itself.
+ */
+describe('no rule can report a flag and a level that disagree', () => {
+  type Scenario = { readonly label: string; readonly result: RiskAssessment };
+
+  const HR_VALUES = [20, 39, 40, 41, 72, 100, 119, 120, 121, 150, 300];
+  const SPO2_VALUES = [50, 84, 85, 91, 92, 98, 100];
+  const ENVIRONMENTS: readonly (readonly [string, EnvironmentSnapshot])[] = [
+    ['comfortable', COMFORTABLE],
+    ['danger', envAtHeatIndexF(103)],
+    ['extreme', envAtHeatIndexF(130)],
+  ];
+
+  /** Impact then five still readings — the one shape that confirms a fall. */
+  function fallLike(hr: number, spo2: number): SensorReading[] {
+    const readings = [reading({ at: at(-60 * SECOND), hr, spo2, motionSummary: impactMotion(3) })];
+    for (let offset = 50; offset >= 0; offset -= 10) {
+      readings.push(
+        reading({ at: at(-offset * SECOND), hr, spo2, motionSummary: stillMotion() }),
+      );
+    }
+    return readings;
+  }
+
+  const SHAPES: readonly (readonly [string, (hr: number, spo2: number) => SensorReading[]])[] = [
+    [
+      'still',
+      (hr, spo2) => series({ count: 6, everyMs: MINUTE, endingAt: at(0), hr, spo2 }),
+    ],
+    [
+      // Deliberately included: with a uniform series the newest reading is always the
+      // run's peak, so a rule that scores off the newest sample looks correct. That is
+      // precisely how the flagged-but-green defect survived. An 8 bpm dip on the last
+      // reading is one standard error for consumer optical HR.
+      'noise-dip-on-newest',
+      (hr, spo2) =>
+        series({ count: 6, everyMs: MINUTE, endingAt: at(0), hr, spo2 }).map((r, index) =>
+          index === 5 ? { ...r, hr: Math.max(hr - 8, 20) } : r,
+        ),
+    ],
+    [
+      'no-motion-channel',
+      (hr, spo2) =>
+        series({ count: 6, everyMs: MINUTE, endingAt: at(0), hr, spo2 }).map(
+          ({ motionSummary: _dropped, ...rest }) => rest,
+        ),
+    ],
+    ['impact-then-still', fallLike],
+  ];
+
+  const SCENARIOS: Scenario[] = [];
+  for (const hr of HR_VALUES) {
+    for (const spo2 of SPO2_VALUES) {
+      for (const [shapeLabel, build] of SHAPES) {
+        for (const [envLabel, environment] of ENVIRONMENTS) {
+          SCENARIOS.push({
+            label: `hr=${hr} spo2=${spo2} ${shapeLabel} ${envLabel}`,
+            result: assessRisk({ readings: build(hr, spo2), environment }),
+          });
+        }
+      }
+    }
+  }
+
+  /** Names of scenarios in which any category violates `holds`. */
+  function violations(holds: (category: RiskAssessment['categories'][number]) => boolean): string[] {
+    return SCENARIOS.filter(({ result }) => !result.categories.every(holds)).map(
+      ({ label }) => label,
+    );
+  }
+
+  it('sweeps a grid wide enough to reach every flag', () => {
+    // A sweep that never fires anything would pass every invariant below vacuously.
+    const fired = new Set(SCENARIOS.flatMap(({ result }) => result.flaggedRules));
+    expect([...fired].sort()).toEqual([
+      'cardiovascular.hr.bradycardia',
+      'cardiovascular.hr.tachycardia',
+      'fall.impactThenStillness',
+      'heat.index.danger',
+      'heat.index.extremeDanger',
+      'respiratory.spo2.low',
+    ]);
+    expect(SCENARIOS.length).toBe(
+      HR_VALUES.length * SPO2_VALUES.length * SHAPES.length * ENVIRONMENTS.length,
+    );
+  });
+
+  it('never pairs a flag with a green level', () => {
+    // The defect this block exists for.
+    expect(violations((category) => !category.flagged || category.level !== 'green')).toEqual([]);
+  });
+
+  it('never pairs a flag with a null rule id', () => {
+    expect(violations((category) => !category.flagged || category.rule !== null)).toEqual([]);
+  });
+
+  it('reports the most severe fired rule as `rule`', () => {
+    expect(violations((category) => category.rule === (category.firedRules[0] ?? null))).toEqual([]);
+  });
+
+  it('only marks a fired rule critical', () => {
+    expect(
+      violations((category) =>
+        category.criticalRules.every((rule) => category.firedRules.includes(rule)),
+      ),
+    ).toEqual([]);
+  });
+
+  it('never reports a critical rule below red', () => {
+    expect(
+      violations((category) => category.criticalRules.length === 0 || category.level === 'red'),
+    ).toEqual([]);
+  });
+
+  it('keeps every score inside 0–100 and every level inside the three bands', () => {
+    expect(
+      violations(
+        (category) =>
+          category.score >= 0 &&
+          category.score <= 100 &&
+          ['green', 'amber', 'red'].includes(category.level),
+      ),
+    ).toEqual([]);
+  });
+
+  it('escalates to SOS only on a critical rule', () => {
+    const offenders = SCENARIOS.filter(
+      ({ result }) => result.sosCandidate && result.criticalRules.length === 0,
+    ).map(({ label }) => label);
+    expect(offenders).toEqual([]);
+  });
+
+  it('promotes only category-fired rules to the top-level flag list', () => {
+    const offenders = SCENARIOS.filter(({ result }) => {
+      const fired = new Set(result.categories.flatMap((category) => category.firedRules));
+      return !result.flaggedRules.every((rule) => fired.has(rule));
+    }).map(({ label }) => label);
+    expect(offenders).toEqual([]);
+  });
+});
+

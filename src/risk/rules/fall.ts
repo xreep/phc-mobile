@@ -27,6 +27,19 @@
  *    > 10 min") shows the spec intends ongoing incapacity for SOS rather than a
  *    historical event.
  *
+ * ## Why "spike" is not a peak threshold
+ * The spec says "sudden accelerometer spike", but a peak alone cannot carry that. At PRD
+ * §7.2.1's 30–60 s polling cadence the engine sees a *summary* of each interval, so
+ * `peakG` is a maximum over ~1500–3000 raw samples, and in that statistic an ordinary
+ * pocket footstrike reaches the same 2–2.5 g as a fall. The discriminator is the
+ * interval *minimum*: a fall is preceded by free-fall, and walking has no
+ * near-weightless phase. See `RiskThresholds.fall.freeFallMaxG`.
+ *
+ * Both halves of the rule are consequently limited by the aggregation interval rather
+ * than by their thresholds, and the fix is architectural: once ingestion (PRD §7.2.1)
+ * detects impacts per-sample and emits an explicit peak and timestamp, this rule should
+ * consume that instead of re-deriving an event from a minute-long summary.
+ *
  * ## The false positive this cannot rule out
  * A dropped phone that lands and stays put produces the same signature as a fall. No
  * pocket-carried accelerometer can distinguish the two, which is why this rule reports
@@ -79,7 +92,7 @@ export function assessFall(context: RuleContext): RuleOutcome {
     return unknownOutcome('Movement is not being monitored right now.', 'No motion data');
   }
 
-  const impacts = findImpacts(readings, fall.impactG, plausible.motionG);
+  const impacts = findImpacts(readings, fall.impactG, fall.freeFallMaxG, plausible.motionG);
 
   // Newest impact first: if several are in the window, the most recent one determines
   // the current state. An older confirmed fall the user has since recovered from must
@@ -100,10 +113,17 @@ export function assessFall(context: RuleContext): RuleOutcome {
       break;
     }
 
-    // Not enough elapsed time for `stillnessMs` of stillness to even be observable
-    // yet — "not a fall" and "too early to say" are different answers, and saying the
-    // first while the second is true is how a real fall gets a green card.
-    if (pending === null && now - impact.timestamp < fall.stillnessMs) {
+    // "Not a fall" and "too early to say" are different answers, and giving the first
+    // while the second is true is how a real fall gets a confident all-clear.
+    //
+    // The test is whether the *search window* has been fully observed, not whether
+    // `stillnessMs` has elapsed. Those coincide only at fine sampling; at PRD §7.2.1's
+    // 30–60 s cadence a `stillnessMs` grace period (10 s) expires before the first
+    // post-impact reading even arrives, so the tick after a genuine fall reported
+    // "you appear to be moving normally" with `dataQuality: 'ok'`. The loop above
+    // already truncates the search at `now`, so an unfinished window is exactly the
+    // condition under which the answer can still change.
+    if (pending === null && now - impact.timestamp < fall.stillnessWindowMs) {
       pending = impact;
     } else if (unconfirmed === null) {
       unconfirmed = impact;

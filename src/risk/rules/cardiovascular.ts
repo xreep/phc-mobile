@@ -17,6 +17,20 @@
  * The cost is that PPG dropouts can produce spurious low values. That is handled by
  * the plausibility gate and surfaced through `dataQuality` — not by quietly adding a
  * sustain requirement the spec does not have.
+ *
+ * ## Why "sustained" is latched rather than consecutive
+ * The spec's threshold is a number; a sensor's output is a number plus noise. Consumer
+ * optical heart-rate has a resting mean absolute error around 7 bpm, so a true HR of 125
+ * emits readings on both sides of 120, and "sustained" read as *strictly consecutive
+ * readings above 120* is satisfied by almost no real episode. It fails in the worst
+ * direction: a single low reading on the newest sample used to collapse the run to `null`
+ * and take the advisory precursor with it, reporting five minutes of measured tachycardia
+ * as a **green** card.
+ *
+ * So the run arms at 120 and releases at `tachycardiaReleaseAbove` (110), and the
+ * evidence bar is kept where it was by counting only the readings above 120 toward
+ * `minSustainedSamples`. The specified threshold is untouched — nothing here fires below
+ * 121 — and the hysteresis governs only when an episode already underway is over.
  */
 
 import { HEAT_STRESS_FLAG_MIN_F } from '../heat-index';
@@ -104,8 +118,22 @@ export function assessCardiovascular(context: RuleContext): RuleOutcome {
   const bradycardia = hr < heartRate.bradycardiaBelow;
 
   // --- Tachycardia: needs duration AND rest. ---
-  const run = trailingRun(samples, (value) => value > heartRate.tachycardiaAbove, window.maxGapMs);
-  const elevated = hr > heartRate.tachycardiaAbove;
+  //
+  // Two predicates, not one. The run arms above the spec's 120 and is held above
+  // `tachycardiaReleaseAbove`, because at a ~7 bpm mean sensor error a true HR of 125
+  // emits readings on both sides of 120 and a strictly-consecutive run never accumulates.
+  // `run.count` still counts only the readings above 120, so the evidence bar is unchanged.
+  const run = trailingRun(
+    samples,
+    (value) => value > heartRate.tachycardiaAbove,
+    window.maxGapMs,
+    (value) => value > heartRate.tachycardiaReleaseAbove,
+  );
+  // An episode in progress, whatever the newest reading happens to say. Deriving this
+  // from the run rather than from `hr` is what stops one noisy sample from silencing the
+  // rule entirely: `hr > tachycardiaAbove` implies a non-null run, so this is strictly
+  // more sensitive, never less.
+  const elevated = run !== null;
   const sustained =
     run !== null &&
     run.spanMs >= heartRate.sustainedForMs &&
@@ -153,7 +181,16 @@ export function assessCardiovascular(context: RuleContext): RuleOutcome {
       : 'ok';
 
   const score = clampScore(
-    scoreFor(hr, heartRate.tachycardiaAbove, heartRate.bradycardiaBelow, tachycardiaFlag),
+    // Score the *episode*, not the newest reading. Under hysteresis the newest sample can
+    // sit below 120 while a five-minute run is flagged, and `scoreFor` would then take its
+    // normal-band branch — producing a green card with `flagged: true`. `run` is non-null
+    // only when HR is above the release floor, so this cannot reach the bradycardia branch.
+    scoreFor(
+      run === null ? hr : run.maxValue,
+      heartRate.tachycardiaAbove,
+      heartRate.bradycardiaBelow,
+      tachycardiaFlag,
+    ),
   );
 
   const guidance = bradycardia
@@ -166,6 +203,12 @@ export function assessCardiovascular(context: RuleContext): RuleOutcome {
           ? 'Heart-rate reading is out of date.'
           : 'Resting heart rate looks normal.';
 
+  // Naming the peak matters when it is not the current value: a red card reading
+  // "HR 119 bpm" contradicts itself, and the peak is what the level was decided on.
+  const peak = run === null ? null : Math.round(run.maxValue);
+  const metric =
+    peak !== null && peak > Math.round(hr) ? `${metricFor(hr)} (peak ${peak})` : metricFor(hr);
+
   return {
     level: levelForScore(score),
     flagged,
@@ -174,7 +217,7 @@ export function assessCardiovascular(context: RuleContext): RuleOutcome {
     // Neither heart-rate predicate is a PRD §7.2.5 emergency trigger on its own.
     criticalRules: [],
     score,
-    metric: metricFor(hr),
+    metric,
     guidance,
     dataQuality,
     envMultiplier,

@@ -313,11 +313,36 @@ export type RiskThresholds = {
   readonly heartRate: {
     /** PRD §7.2.2 flag: HR strictly above this, sustained at rest. */
     readonly tachycardiaAbove: number;
+    /**
+     * Hysteresis floor: once `tachycardiaAbove` has been exceeded, the episode is treated
+     * as continuing while HR stays strictly above **this** value.
+     *
+     * **Must not exceed `tachycardiaAbove`** — `resolveRiskThresholds` clamps it down if
+     * it does. A release value above the arm value would silently raise the effective
+     * spec threshold, because a reading that arms the run would fail to hold it.
+     *
+     * Why it exists: without it a run breaks on any single reading at or below 120, and
+     * consumer optical HR has a resting error around 7 bpm. A true HR of 125 therefore
+     * produces readings straddling the threshold, and the run never accumulates. Worse,
+     * one low reading *on the newest sample* used to collapse the run to `null` and take
+     * the advisory down with it — five minutes of sustained tachycardia reported as a
+     * green card. The spec threshold stays exactly 120; this only governs when an already
+     * triggered episode is considered over.
+     *
+     * Too high (near 120): the noise problem returns. Too low: an episode latches on one
+     * spike and then holds through genuinely normal readings — bounded by
+     * `minSustainedSamples`, which counts only the readings that actually exceeded 120.
+     */
+    readonly tachycardiaReleaseAbove: number;
     /** PRD §7.2.2 flag: HR strictly below this. Not sustain-gated. */
     readonly bradycardiaBelow: number;
     /** How long the tachycardia condition must hold continuously. */
     readonly sustainedForMs: number;
-    /** Minimum samples inside that span before it can be called "sustained". */
+    /**
+     * Minimum readings *above `tachycardiaAbove`* inside that span before it can be
+     * called "sustained". Counts armed readings only, not every reading in the span, so
+     * hysteresis cannot turn one spike plus a long quiet stretch into a flag.
+     */
     readonly minSustainedSamples: number;
     /** |magnitude − 1 g| at or below this counts as "at rest". */
     readonly restBandG: number;
@@ -337,6 +362,21 @@ export type RiskThresholds = {
   readonly fall: {
     /** Impact spike magnitude, g (gravity included). */
     readonly impactG: number;
+    /**
+     * Ceiling on an interval's *minimum* magnitude for its spike to count as an impact.
+     *
+     * A fall is preceded by free-fall, so the interval containing it dips far below 1 g
+     * before peaking. Walking does not: the peak is a footstrike, and there is no
+     * near-weightless phase. Since `impactG` is compared against a peak taken over a
+     * whole 30–60 s aggregation interval — a statistic in which ordinary pocket
+     * footstrikes reach 2–2.5 g — the peak alone carries almost no information, and this
+     * clause is what actually separates a fall from a walk.
+     *
+     * Only applied when a {@link MotionSummary} supplies `minG`. A lone raw vector has
+     * no interval minimum to test, and rejecting those would disable fall detection
+     * outright for that input shape rather than merely narrowing it.
+     */
+    readonly freeFallMaxG: number;
     /** |mean magnitude − 1 g| at or below this counts as still. Compared against the
      *  interval *mean*, not its peak, so a brief twitch does not break stillness —
      *  post-fall inactivity in the literature tolerates minor movement. */
@@ -352,9 +392,29 @@ export type RiskThresholds = {
     readonly stillnessPeakG: number;
     /** Stillness required after the impact to confirm a fall. */
     readonly stillnessMs: number;
-    /** How long after the impact to keep looking for that stillness. The stillness
-     *  need not begin immediately — people commonly move briefly before going
-     *  still, so requiring instant inactivity misses real falls. */
+    /**
+     * How long after the impact to keep looking for that stillness.
+     *
+     * **Must be at least `stillnessMs + window.maxGapMs`.** This is the same
+     * unsatisfiable-threshold trap as `window.ms` above, and it bites harder here.
+     * Stillness is measured as the *span* between still readings, so a lone reading
+     * inside the search window spans 0 ms and confirms nothing. At PRD §7.2.1's 30–60 s
+     * poll cadence a 30 s window admits one reading at best and none at worst — the flag
+     * then never fires, on any input, with nothing logged. `resolveRiskThresholds`
+     * raises it rather than letting that happen.
+     *
+     * The consequence is that this value is set by the *data rate*, not by physiology:
+     * it has to be wide enough for the sampler to land two readings in it. Attributing
+     * stillness to an impact two minutes earlier is genuinely weaker evidence than
+     * attributing it to one ten seconds earlier, which is why `freeFallMaxG` matters —
+     * widening the window without gating the impact would turn "walked, then sat down"
+     * into a confirmed fall.
+     *
+     * It has a second role: while the window is still open the fall verdict is reported
+     * as *pending* rather than negative, because the answer can still change on the next
+     * tick. Using `stillnessMs` for that grace period instead is a bug — it expires
+     * before the first post-impact reading arrives — so the two must not be swapped.
+     */
     readonly stillnessWindowMs: number;
   };
   readonly stillness: {

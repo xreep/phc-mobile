@@ -55,6 +55,14 @@ export type MotionEstimate = {
    * RMS is what the ingestion layer can compute in one pass.
    */
   readonly centralG: number;
+  /**
+   * Smallest magnitude observed, g, or `null` when the interval minimum is unknown.
+   *
+   * `null` for a lone raw vector: a single sample's minimum is itself, which says
+   * nothing about whether a free-fall phase occurred. Callers must treat `null` as
+   * "unobserved" and not as "no free-fall" — see {@link findImpacts}.
+   */
+  readonly minG: number | null;
   readonly sampleCount: number;
   /** True when this came from a single raw vector rather than an aggregated interval,
    *  so `peakG === centralG` and sub-interval spikes are invisible. */
@@ -86,6 +94,13 @@ export function motionEstimate(
     return {
       peakG: summary.peakG,
       centralG: summary.rmsG,
+      // Validated separately from peak/rms: a summary with a usable peak but a garbage
+      // minimum should still be usable for everything that does not need the minimum,
+      // rather than discarding the whole reading.
+      minG:
+        isUsableNumber(summary.minG) && isInRange(summary.minG, motionRange)
+          ? summary.minG
+          : null,
       sampleCount: summary.sampleCount,
       fromSingleSample: false,
     };
@@ -95,7 +110,13 @@ export function motionEstimate(
   if (motion !== undefined) {
     const magnitude = motionMagnitudeG(motion);
     if (isUsableNumber(magnitude) && isInRange(magnitude, motionRange)) {
-      return { peakG: magnitude, centralG: magnitude, sampleCount: 1, fromSingleSample: true };
+      return {
+        peakG: magnitude,
+        centralG: magnitude,
+        minG: null,
+        sampleCount: 1,
+        fromSingleSample: true,
+      };
     }
   }
 
@@ -106,12 +127,19 @@ export function motionEstimate(
  * Stillness for fall confirmation: central magnitude inside the rest band **and**
  * peak under an absolute ceiling.
  *
- * The peak clause is not redundant. Free-fall (≈0 g) followed by impact (≫1 g) inside
- * one aggregation interval averages back to ≈1 g, so a central-only test would
- * classify the very interval containing the fall as "still". Bounding the peak closes
- * that hole while leaving room for the small movements a genuinely incapacitated
- * person still makes — post-fall-inactivity detection in the literature tolerates
- * minor movement, and demanding perfect stillness misses real falls.
+ * The peak clause does the real work. Free-fall (≈0 g) followed by impact (≫1 g) inside
+ * one aggregation interval averages back to ≈1 g, so a central-only test would classify
+ * the very interval containing the fall as "still"; and walking sits at RMS ≈ 1.05,
+ * *inside* any useful rest band, because gravity dominates the average. Bounding the peak
+ * closes both holes while leaving room for the small movements a genuinely incapacitated
+ * person still makes — post-fall-inactivity detection in the literature tolerates minor
+ * movement, and demanding perfect stillness misses real falls.
+ *
+ * The central clause is a plausibility guard rather than a movement test: for a signal
+ * oscillating about 1 g it provably cannot bind before the peak ceiling does. It earns
+ * its place by rejecting steady magnitudes that are *not* gravity — sustained
+ * acceleration, or a stuck accelerometer reporting 0.5 g — which the peak ceiling admits.
+ * See `src/risk/__tests__/stillness.test.ts`.
  */
 export function isStillInterval(
   reading: SensorReading,
@@ -248,34 +276,75 @@ export function latestSample(samples: readonly TimedValue[]): TimedValue | null 
   return samples.length === 0 ? null : samples[samples.length - 1];
 }
 
-/** A maximal run of qualifying samples ending at the newest sample. */
+/** A latched run of qualifying samples ending at the newest sample. */
 export type TrailingRun = {
   /** `to − from`. See the note in {@link trailingRun} on why this under-reads. */
   readonly spanMs: number;
+  /**
+   * How many samples in the run actually satisfied `qualifies` — not how many the span
+   * contains.
+   *
+   * The distinction only exists once hysteresis is in play, and it is what keeps a
+   * minimum-sample requirement meaningful: a lone spike over the threshold followed by
+   * ten minutes just under it spans ten minutes, but it is one reading's worth of
+   * evidence and must not pass a "three independent readings" test.
+   */
   readonly count: number;
+  /** Timestamp of the oldest *qualifying* sample in the run. */
   readonly from: number;
   readonly to: number;
+  /**
+   * Largest qualifying value in the run — the episode's peak.
+   *
+   * Needed because with hysteresis the newest value is no longer the one that describes
+   * the episode. Scoring a five-minute tachycardia off a newest reading of 119 bpm would
+   * land in the normal band and report green while `flagged` is true.
+   *
+   * Deliberately only a maximum: a predicate testing a *lower* bound would want the
+   * minimum instead, and no caller needs that, so adding it would be unused data.
+   */
+  readonly maxValue: number;
   /** The run extends to the oldest sample available, so the true duration may be
    *  longer than `spanMs` — the window simply does not reach far enough to tell. */
   readonly reachesStart: boolean;
 };
 
 /**
- * Longest run of consecutive qualifying samples **ending at the newest sample**.
- * `null` when the newest sample does not qualify.
+ * Longest run of qualifying samples **ending at the newest sample**, with optional
+ * hysteresis. `null` when no such run is currently latched.
  *
  * Trailing is the whole point: a tachycardia that resolved eight minutes ago must not
- * keep firing, and only a run anchored to the newest sample expresses "still true
- * now".
+ * keep firing, and only a run anchored to the newest sample expresses "still true now".
  *
- * `spanMs` measures newest-minus-oldest *qualifying* sample, which systematically
- * **under-reads** the real duration — the condition began somewhere between the last
- * non-qualifying sample and the first qualifying one, and that lead-in is discarded.
- * At 60 s polling, "sustained for 10 min" therefore needs 11 samples, not 10. That
- * bias is left in deliberately: it demands slightly more evidence before flagging,
- * which is the right trade for a non-instantaneous condition like tachycardia. It
- * would be the wrong trade for fall detection, which is why falls use explicit event
- * timing instead of this helper.
+ * ## Why hysteresis, and not just a threshold
+ * Without it, a run breaks on *any* non-qualifying sample. Consumer optical heart-rate
+ * has a resting error around 7 bpm, so a true HR of 125 produces readings that straddle
+ * a 120 threshold — `129, 131, 118, 127, 133, 122, 119, 128` is eight minutes of genuine
+ * sustained tachycardia whose longest strictly-consecutive run is one sample, spanning
+ * 0 ms. Worse, a single low sample *on the newest reading* used to return `null` and
+ * silence the rule entirely, turning five minutes of sustained tachycardia into a green
+ * card. Sensor noise must not be able to erase a real episode.
+ *
+ * So the run is a latch, in the Schmitt-trigger sense:
+ *  - `qualifies` **arms** it — at least one sample in the run must clear this, or nothing
+ *    ever started and there is no episode. `count` and `maxValue` describe these samples
+ *    only, so a minimum-sample requirement still measures real evidence.
+ *  - `sustains` **holds** it — every sample in the run, including the newest, must clear
+ *    this. Defaults to `qualifies`, which restores the strict behaviour exactly: when the
+ *    two predicates are the same, every sample in the run is armed and nothing changes.
+ *
+ * `spanMs` is measured from the oldest *armed* sample, not from the latch boundary. That
+ * matters in the other direction: a long stretch just under the arm threshold followed by
+ * one sample over it is a brief spike, not a sustained episode, and measuring from the
+ * latch boundary would report it as hours long.
+ *
+ * `spanMs` still systematically **under-reads** the real duration — the condition began
+ * somewhere between the last non-sustaining sample and the first armed one, and that
+ * lead-in is discarded. At 60 s polling, "sustained for 10 min" therefore needs 11
+ * samples, not 10. That bias is left in deliberately: it demands slightly more evidence
+ * before flagging, which is the right trade for a non-instantaneous condition like
+ * tachycardia. It would be the wrong trade for fall detection, which is why falls use
+ * explicit event timing instead of this helper.
  *
  * A gap larger than `maxGapMs` breaks the run: unobserved time is not qualifying time.
  */
@@ -283,29 +352,50 @@ export function trailingRun(
   samples: readonly TimedValue[],
   qualifies: (value: number) => boolean,
   maxGapMs: number,
+  sustains: (value: number) => boolean = qualifies,
 ): TrailingRun | null {
   if (samples.length === 0) return null;
 
   const newest = samples[samples.length - 1];
-  if (!qualifies(newest.value)) return null;
+  if (!sustains(newest.value)) return null;
 
   let index = samples.length - 1;
   while (index > 0) {
     const candidate = samples[index - 1];
-    if (!qualifies(candidate.value)) break;
+    if (!sustains(candidate.value)) break;
     if (samples[index].timestamp - candidate.timestamp > maxGapMs) break;
     index -= 1;
   }
 
-  const oldest = samples[index];
+  // Scan the latched run for the samples that actually armed it. The oldest of those is
+  // where the episode began; none at all means the values only ever sat in the hysteresis
+  // band and nothing was ever triggered.
+  let armedIndex = -1;
+  let count = 0;
+  let maxValue = 0;
+  for (let i = index; i < samples.length; i += 1) {
+    const value = samples[i].value;
+    if (!qualifies(value)) continue;
+    if (armedIndex === -1) {
+      armedIndex = i;
+      maxValue = value;
+    } else if (value > maxValue) {
+      maxValue = value;
+    }
+    count += 1;
+  }
+  if (armedIndex === -1) return null;
+
+  const oldest = samples[armedIndex];
   return {
     spanMs: newest.timestamp - oldest.timestamp,
-    count: samples.length - index,
+    count,
     from: oldest.timestamp,
     to: newest.timestamp,
-    // Reaching index 0 is the only way out of the loop that is not a disqualifying
-    // sample or a coverage gap, so it alone means the window ran out.
-    reachesStart: index === 0,
+    maxValue,
+    // The episode reaching the very first sample in the window is the only case where
+    // we cannot see when it began, so it alone means the window ran out.
+    reachesStart: armedIndex === 0,
   };
 }
 
@@ -381,18 +471,31 @@ export function trailingStillRunMs(
 }
 
 /**
- * Readings whose peak magnitude reaches `impactG`, ascending.
+ * Readings whose motion looks like an impact, ascending.
  *
- * Inclusive at the threshold: a peak of exactly `impactG` is an impact, so the
- * configured number is the first value that fires rather than the last that does not.
+ * Two clauses, and the second is the one doing the work:
+ *
+ * 1. `peakG >= impactG` — inclusive, so the configured number is the first value that
+ *    fires rather than the last that does not.
+ * 2. `minG <= freeFallMaxG` — the interval also dipped toward weightlessness. A fall is
+ *    preceded by free-fall; a walk is not. Because `peakG` here is a maximum over a
+ *    30–60 s aggregation interval, ordinary pocket footstrikes reach the same 2–2.5 g as
+ *    a fall, so clause 1 alone would flag "walked across the room, then sat down".
+ *
+ * Clause 2 is skipped when `minG` is `null` — a lone raw vector carries no interval
+ * minimum, and rejecting those would silently disable fall detection for that input
+ * shape instead of narrowing it. That is the fail-open direction on purpose: a missed
+ * fall is the worse error, and PRD §7.2.5's 30-second cancel absorbs a false one.
  */
 export function findImpacts(
   readings: readonly SensorReading[],
   impactG: number,
+  freeFallMaxG: number,
   motionRange: NumericRange,
 ): SensorReading[] {
   return readings.filter((reading) => {
-    const peak = peakG(reading, motionRange);
-    return peak !== null && peak >= impactG;
+    const estimate = motionEstimate(reading, motionRange);
+    if (estimate === null || estimate.peakG < impactG) return false;
+    return estimate.minG === null || estimate.minG <= freeFallMaxG;
   });
 }

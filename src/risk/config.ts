@@ -51,6 +51,24 @@ export const DEFAULT_RISK_THRESHOLDS: RiskThresholds = {
   heartRate: {
     /** SPEC (PRD §7.2.2): HR > 120 bpm. Strict `>` — 120 does not flag. */
     tachycardiaAbove: 120,
+    /**
+     * DERIVED: 110 bpm — an 8 % deadband below the arm threshold. Strict `>`, so 110
+     * itself ends the episode.
+     *
+     * This is a hysteresis floor, not a second detection threshold: nothing fires at 110.
+     * It only decides when an episode that already crossed 120 is considered over.
+     *
+     * The size comes from the sensor, not from physiology. Wrist optical HR carries a
+     * resting mean absolute error near 7 bpm, so a true 125 emits readings straddling 120
+     * and a strictly-consecutive run never accumulates — a measured sequence of
+     * `129, 131, 118, 127, 133, 122, 119, 128` is eight minutes of real tachycardia whose
+     * longest strict run is a single sample. Ten bpm covers roughly 1.4 × that error.
+     *
+     * Too high: the straddling problem returns. Too low: a single spike latches an
+     * episode that then holds through normal readings — which is why
+     * `minSustainedSamples` counts only readings above 120.
+     */
+    tachycardiaReleaseAbove: 110,
     /** SPEC (PRD §7.2.2): HR < 40 bpm. Strict `<` — 40 does not flag. */
     bradycardiaBelow: 40,
     /**
@@ -113,9 +131,36 @@ export const DEFAULT_RISK_THRESHOLDS: RiskThresholds = {
      */
     impactG: 2.5,
     /**
-     * DERIVED: 0.15 g of deviation in the interval's *central* magnitude. Slightly
-     * tighter than the cardiac rest band because this one gates an emergency path, and
-     * unlike that band it is not a peak test — brief movement is meant to survive it.
+     * DERIVED: 0.65 g interval minimum. Kangas' pre-impact criterion is < 0.75 g; 0.65
+     * leaves margin below that while staying well under the ≈0.7 g dip an ordinary
+     * pocket-carried walking stride produces.
+     *
+     * This clause, not `impactG`, is what discriminates. Because both are read from a
+     * summary over a 30–60 s interval, `peakG` is a maximum over ~1500–3000 raw samples
+     * and ordinary footstrikes reach 2–2.5 g in it — the same band as a fall. Free-fall
+     * has no everyday analogue, so the minimum is the informative half.
+     *
+     * Known weakness, and the reason this is a stopgap: a minimum over a *whole minute*
+     * of walking will eventually dip low on some swing phase, so the gate erodes as the
+     * aggregation interval grows. The real fix is per-sample impact detection in the
+     * ingestion layer (PRD §7.2.1) emitting an explicit impact peak and timestamp, at
+     * which point this rule should consume that instead of re-deriving it from a summary.
+     */
+    freeFallMaxG: 0.65,
+    /**
+     * DERIVED: 0.15 g of deviation in the interval's *central* (RMS) magnitude.
+     *
+     * This is a **plausibility guard, not the movement test.** For any signal
+     * oscillating about 1 g, RMS ≈ 1 + s²/2, so escaping a 0.15 g band needs a standard
+     * deviation near 0.55 g — and `stillnessPeakG` rejects a peak that large first. On
+     * ordinary human motion the band therefore never decides the outcome: walking has
+     * RMS ≈ 1.05, comfortably inside it. `stillnessPeakG` is what keeps walking out.
+     *
+     * What it does catch is a magnitude that is steady but *not gravity*: a minute
+     * averaging 1.2 g (sustained acceleration) or 0.5 g (a stuck or miscalibrated
+     * accelerometer) passes the peak ceiling and must not be read as "lying still".
+     * `src/risk/__tests__/stillness.test.ts` pins both roles, including the case where
+     * the band provably cannot bind, so it is not credited with work it does not do.
      */
     restBandG: 0.15,
     /**
@@ -130,17 +175,36 @@ export const DEFAULT_RISK_THRESHOLDS: RiskThresholds = {
      * about 2 s upward; 10 s is long enough that sitting down heavily and then pausing
      * does not qualify, short enough to alert while it still matters.
      *
-     * Too high: help is delayed, and a user who briefly stirs resets the clock. Too
-     * low: every deliberate "put the phone down and leave it" becomes a possible fall.
+     * **Quantized by the poll rate, and not literally 10 s.** Stillness is the *span*
+     * between still readings, so the smallest observable value is one poll interval.
+     * At PRD §7.2.1's 30–60 s cadence every setting in (0, 30 s] behaves identically —
+     * "two consecutive still polls" — so this reads as 30–60 s in practice. It becomes
+     * literal only once stillness is evaluated per-sample in the ingestion layer.
+     *
+     * Kept at 10 s rather than raised to a nominal 60 s because the effective value is
+     * already the poll interval; writing 60 s would encode the current cadence into the
+     * threshold and then *over*-shoot if ingestion ever samples faster. The floor that
+     * has to move with the cadence is `stillnessWindowMs`, which `resolveRiskThresholds`
+     * derives from this plus `window.maxGapMs`.
      */
     stillnessMs: 10 * SECOND,
     /**
-     * DERIVED: 30 seconds of search after the impact. People who fall commonly move
-     * for several seconds — rolling, trying to get up — before going still, so
-     * requiring stillness to begin immediately misses real falls. Too long, and
-     * unrelated stillness half a minute later gets attributed to the impact.
+     * DERIVED: `stillnessMs + maxGapMs` = 2 min 10 s of search after the impact.
+     *
+     * This number is dictated by the sampling rate, not by physiology. Stillness is
+     * measured as the *span* between still readings, so the window has to be wide enough
+     * for the sampler to place two readings inside it. PRD §7.2.1 polls every 30–60 s,
+     * and the previous value here was 30 s — which meant one reading landed in the window
+     * at best and none at worst, a span of 0 ms, and the fall flag could not fire at all.
+     * That failed silently: every test in the suite sampled at 1 Hz, so it passed.
+     *
+     * Too low is therefore not "less sensitive", it is "off". Too high weakens the
+     * attribution — stillness two minutes after a spike is thinner evidence that the
+     * spike caused it — which is carried by `freeFallMaxG` gating the spike instead.
+     *
+     * `resolveRiskThresholds` enforces the floor, so an override cannot reintroduce this.
      */
-    stillnessWindowMs: 30 * SECOND,
+    stillnessWindowMs: 10 * SECOND + 2 * MINUTE,
   },
 
   stillness: {
@@ -238,16 +302,40 @@ export function resolveRiskThresholds(overrides?: PartialRiskThresholds): RiskTh
 
   const heartRate = mergeGroup(base.heartRate, overrides.heartRate);
   const window = mergeGroup(base.window, overrides.window);
+  const fall = mergeGroup(base.fall, overrides.fall);
 
   // The window is half-open, `(now − ms, now]`, so the widest span it can hold is
   // strictly less than `ms`. One extra `maxGapMs` of headroom guarantees the sustained
   // run is observable rather than exactly borderline.
   const minimumWindowMs = heartRate.sustainedForMs + window.maxGapMs;
 
+  // Same trap, applied to the post-impact search. Stillness is a *span* between
+  // readings, so a window narrower than one poll interval can only ever contain a
+  // single reading spanning 0 ms, and the fall flag becomes unsatisfiable rather than
+  // merely strict. `maxGapMs` is the engine's bound on how far apart readings may be,
+  // so it is the right allowance for "wide enough to hold two of them".
+  const minimumStillnessWindowMs = fall.stillnessMs + window.maxGapMs;
+
+  // Third instance of it, in a different disguise. A release threshold above the arm
+  // threshold means a reading that arms the run cannot hold it, so the trailing run
+  // needs a value above the *release* level — silently moving the spec's 120 upward.
+  // Clamping to equality degrades to the strict, no-hysteresis behaviour, which is
+  // merely less noise-tolerant rather than broken.
+  const tachycardiaReleaseAbove = Math.min(
+    heartRate.tachycardiaReleaseAbove,
+    heartRate.tachycardiaAbove,
+  );
+
   return {
     spo2: mergeGroup(base.spo2, overrides.spo2),
-    heartRate,
-    fall: mergeGroup(base.fall, overrides.fall),
+    heartRate:
+      tachycardiaReleaseAbove === heartRate.tachycardiaReleaseAbove
+        ? heartRate
+        : { ...heartRate, tachycardiaReleaseAbove },
+    fall:
+      fall.stillnessWindowMs >= minimumStillnessWindowMs
+        ? fall
+        : { ...fall, stillnessWindowMs: minimumStillnessWindowMs },
     stillness: mergeGroup(base.stillness, overrides.stillness),
     window:
       window.ms >= minimumWindowMs ? window : { ...window, ms: minimumWindowMs },
