@@ -1,10 +1,15 @@
 /**
- * Placeholder health + environment data for the static app shell (PRD §7.2.4).
+ * Placeholder health data for the app shell (PRD §7.2.4).
  *
- * This is the single swap-in point for real data later: the sensor-ingestion
- * (§7.2.1), risk-engine (§7.2.2), and environmental-context (§7.2.3) phases
- * will replace these constants with live values behind the same shapes. Nothing
- * here reflects a real person — it is demo data.
+ * This is the swap-in point for the remaining simulated values: PRD §7.2.1 sensor
+ * ingestion will replace the vitals and trend constants with live values behind the same
+ * shapes. Nothing here reflects a real person — it is demo data.
+ *
+ * The environment constant that used to live here is **gone**, not moved. Weather, air
+ * quality, and advisories are now fetched live for the device's coarse location — see
+ * `src/environment/` and `src/app/environment.tsx`. Keeping a plausible-looking
+ * `ENVIRONMENT` fallback beside a live feed is how a demo heat index ends up on screen
+ * during an outage with nothing saying so, so there is deliberately nothing to fall back to.
  */
 
 /** Traffic-light status. Subset of the theme's RiskColors keys. */
@@ -129,59 +134,6 @@ export const TRENDS: Record<TrendRange, TrendSeries[]> = {
       avg: 36.8,
       max: 37.6,
       points: [36.6, 36.7, 37.6, 37.2, 36.9, 36.8, 36.8],
-    },
-  ],
-};
-
-export type Advisory = {
-  id: string;
-  source: string;
-  title: string;
-  detail: string;
-  level: RiskLevel;
-};
-
-export type EnvironmentData = {
-  location: string;
-  updatedAt: string;
-  tempC: number;
-  humidity: number;
-  heatIndexC: number;
-  heatIndexBand: { label: string; level: RiskLevel };
-  aqi: number;
-  aqiCategory: { label: string; level: RiskLevel };
-  advisories: Advisory[];
-};
-
-/** Local weather, AQI, and active advisories (PRD §7.2.3 / §7.2.4). */
-export const ENVIRONMENT: EnvironmentData = {
-  location: 'Chennai, Tamil Nadu',
-  updatedAt: '12 min ago',
-  tempC: 38,
-  humidity: 62,
-  // Derived, not invented: 38 °C at 62 % RH is 133.5 °F = 56.4 °C by the NOAA
-  // regression, which is Extreme Danger (≥125 °F), not Danger. Demo data that
-  // contradicts the formula misleads anyone reading it as a worked example, so
-  // `src/risk/__tests__/heat-index.test.ts` asserts these three fields against
-  // `computeHeatIndexC(tempC, humidity)` and fails if they drift again.
-  heatIndexC: 56.4,
-  heatIndexBand: { label: 'Extreme Danger', level: 'red' },
-  aqi: 168,
-  aqiCategory: { label: 'Unhealthy', level: 'red' },
-  advisories: [
-    {
-      id: 'imd-heat',
-      source: 'IMD',
-      title: 'Heat wave warning',
-      detail: 'Severe heat expected 11am–4pm. Stay indoors, hydrate, check on elderly neighbours.',
-      level: 'amber',
-    },
-    {
-      id: 'cpcb-aqi',
-      source: 'CPCB',
-      title: 'Poor air quality',
-      detail: 'PM2.5 elevated. Limit outdoor exertion; sensitive groups should wear a mask.',
-      level: 'red',
     },
   ],
 };

@@ -1,5 +1,5 @@
 /**
- * End-to-end check that the Dashboard renders *computed* risk, not constants.
+ * End-to-end check that the Dashboard renders *computed* risk from the *live* environment.
  *
  * The unit tests next to the fixture prove the engine returns the right assessment; this
  * proves that assessment reaches the screen. Those are different failures — the cards
@@ -11,14 +11,36 @@
  * built inside `rules/heat.ts` at evaluation time, and the "30s ago" freshness is derived
  * from reading timestamps. If any of it were re-hardcoded, these would be the tests that
  * kept passing only if someone copied the engine's exact output into the UI by hand.
+ *
+ * The live environment feed adds a second version of the same question. The heat card used to
+ * be driven by a constant, and swapping in a network call is exactly the kind of change that
+ * can leave a screen looking correct while quietly reading the old source. Two of the tests
+ * below therefore vary the *fetched* observation and assert the card follows it — cool, clean
+ * air must turn the red card green — because a card that cannot change is indistinguishable
+ * from one that is right.
  */
 
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import HomeScreen from '@/app/index';
+import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
+import { liveEnvironment } from '@/environment/__tests__/fixtures';
+import { EnvironmentProvider } from '@/environment/provider';
 
-/** Frozen instant, so the derived "updated" line is exact. */
+// Hoisted above the imports, so the two entry points are already the mocked copies while the
+// real feed hook, provider, engine, and screen all stay in the path. This is the whole app
+// below the network boundary, which is the point of the file.
+jest.mock('@/environment', () => ({
+  ...jest.requireActual('@/environment'),
+  fetchLiveEnvironment: jest.fn(),
+  readCachedEnvironment: jest.fn(),
+}));
+
+const mockedFetch = fetchLiveEnvironment as jest.MockedFunction<typeof fetchLiveEnvironment>;
+const mockedRead = readCachedEnvironment as jest.MockedFunction<typeof readCachedEnvironment>;
+
+/** Frozen instant, so the derived "updated" line is exact. Matches the fixture's anchor. */
 const NOW = 1_766_000_000_000;
 
 const INSETS = {
@@ -36,7 +58,9 @@ const INSETS = {
 function renderHome() {
   return render(
     <SafeAreaProvider initialMetrics={INSETS}>
-      <HomeScreen />
+      <EnvironmentProvider>
+        <HomeScreen />
+      </EnvironmentProvider>
     </SafeAreaProvider>,
   );
 }
@@ -44,6 +68,12 @@ function renderHome() {
 describe('Home dashboard', () => {
   beforeEach(() => {
     jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    mockedFetch.mockReset();
+    mockedRead.mockReset();
+    mockedRead.mockResolvedValue(null);
+    // 38 °C at 62 % RH with an EPA AQI of 168 — the conditions the retired `ENVIRONMENT`
+    // constant described, now arriving the way the app really gets them.
+    mockedFetch.mockResolvedValue(liveEnvironment());
   });
 
   afterEach(() => {
@@ -94,5 +124,60 @@ describe('Home dashboard', () => {
 
     // Present but inert: PRD §7.2.5 owns the cancel window, GPS, and messaging.
     expect(getByText('Emergency SOS')).toBeTruthy();
+  });
+});
+
+describe('the heat card follows the fetched observation', () => {
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    mockedFetch.mockReset();
+    mockedRead.mockReset();
+    mockedRead.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('goes green on a mild day, so the red card is a real positive', async () => {
+    // 18 °C at 55 % RH. If the card were still reading a constant — or a leftover mock —
+    // it would stay red here and no other test in the project would notice.
+    mockedFetch.mockResolvedValue(liveEnvironment({ tempC: 18, humidity: 55, aqi: 32 }));
+
+    const { getByText, getAllByText, queryByText } = await renderHome();
+
+    expect(getByText('Heat conditions are comfortable.')).toBeTruthy();
+    expect(getAllByText('Normal')).toHaveLength(4);
+    expect(queryByText('Alert')).toBeNull();
+    expect(
+      queryByText('Extreme heat danger — get indoors or into shade and cool down now.'),
+    ).toBeNull();
+  });
+
+  it('says it has no weather yet rather than reporting comfort', async () => {
+    // The first render happens before the network answers, and this is the state a user on
+    // a slow connection actually sees. Green is the only level available for an unassessed
+    // category, so the metric and guidance carry the whole difference.
+    mockedFetch.mockReturnValue(new Promise<LiveEnvironment>(() => {}));
+
+    const { getByText, queryByText } = await renderHome();
+
+    expect(getByText('No local weather data yet.')).toBeTruthy();
+    expect(getByText('Heat index —')).toBeTruthy();
+    expect(queryByText('Heat conditions are comfortable.')).toBeNull();
+  });
+
+  it('renders the reading saved offline when the network call fails', async () => {
+    mockedRead.mockResolvedValue(liveEnvironment());
+    mockedFetch.mockRejectedValue(new Error('offline'));
+
+    const { getByText } = await renderHome();
+
+    // The cache exists so the Dashboard keeps assessing heat risk on a train, and a card
+    // built from the last known good observation is the whole return on it.
+    expect(getByText('Heat index 56°C')).toBeTruthy();
+    expect(
+      getByText('Extreme heat danger — get indoors or into shade and cool down now.'),
+    ).toBeTruthy();
   });
 });

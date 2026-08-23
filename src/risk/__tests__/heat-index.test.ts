@@ -9,9 +9,16 @@
  * 2. **Regression lock** on exact outputs. If someone drops the averaging step or a
  *    coefficient, chart agreement alone might still pass within tolerance — these pin
  *    the arithmetic so a silent change cannot slip through.
+ *
+ * There used to be a third: a `mock environment data is physically self-consistent` block
+ * checking that the `ENVIRONMENT` constant's hardcoded `heatIndexC` matched the temperature
+ * and humidity written beside it. That constant is gone — the Environment screen fetches live
+ * observations now — and the drift it guarded against is no longer possible, because both the
+ * service and the test fixture *derive* the index from their own inputs. The end-to-end
+ * agreement between what the screen prints and what the engine scores is asserted in
+ * `src/environment/__tests__/service.test.ts` instead, which is also what removed this file's
+ * only import from `@/constants` — a dependency the engine is not supposed to have at all.
  */
-
-import { ENVIRONMENT } from '@/constants/health-data';
 
 import {
   celsiusToFahrenheit,
@@ -242,21 +249,5 @@ describe('heat index — validated domain', () => {
     const tempF = celsiusToFahrenheit(41);
     expect(isHeatIndexOutOfDomain(tempF)).toBe(false);
     expect(computeHeatIndexF(tempF, 70) as number).toBeGreaterThan(160);
-  });
-});
-
-describe('mock environment data is physically self-consistent', () => {
-  // The placeholder data feeds the Environment screen directly, so a wrong value there
-  // is visible to users and misleads anyone treating it as a worked example.
-  it('states the heat index its own temperature and humidity produce', () => {
-    const computed = computeHeatIndexC(ENVIRONMENT.tempC, ENVIRONMENT.humidity);
-    expect(computed).not.toBeNull();
-    expect(ENVIRONMENT.heatIndexC).toBeCloseTo(computed as number, 1);
-  });
-
-  it('states the band that heat index actually falls in', () => {
-    const band = heatIndexBandForC(ENVIRONMENT.heatIndexC);
-    expect(ENVIRONMENT.heatIndexBand.label).toBe(band.label);
-    expect(ENVIRONMENT.heatIndexBand.level).toBe(band.level);
   });
 });

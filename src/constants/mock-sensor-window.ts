@@ -1,39 +1,47 @@
 /**
- * A rolling sensor window synthesised from the demo constants in `health-data.ts`,
- * so the Dashboard can run the real Tier-1 risk engine (PRD §7.2.2) instead of
- * showing hardcoded card levels.
+ * A rolling sensor window synthesised from the demo constants in `health-data.ts`, so the
+ * Dashboard can run the real Tier-1 risk engine (PRD §7.2.2) instead of showing hardcoded
+ * card levels — paired with the **live** environment observation from PRD §7.2.3.
+ *
+ * ## What is still simulated and what is not
+ * The vitals and motion window is simulated: PRD §7.2.1 sensor ingestion has not landed, so
+ * there is no Health Connect or BLE buffer to read. The environment is no longer simulated —
+ * `buildEnvironmentSnapshot` narrows a real OpenWeatherMap observation, fetched for the
+ * device's coarse location, into the shape the engine consumes. The mock `ENVIRONMENT`
+ * constant this used to read is gone.
+ *
+ * That split is why the file keeps its name: what remains mock here is the *sensor* window.
  *
  * ## Why this is a separate file
  * `health-data.ts` imports nothing, and that is load-bearing rather than incidental:
- * `src/risk/types.ts` takes three *types* from it and documents that as the engine's
- * only coupling to the app, which is what keeps the engine runtime-dependency-free and
+ * `src/risk/types.ts` takes three *types* from it and documents that as the engine's only
+ * coupling to the app, which is what keeps the engine runtime-dependency-free and
  * unit-testable without a device. Putting a builder that imports `@/risk` into
- * `health-data.ts` would close that import into a cycle. So the demo values stay there
- * and the assembly happens here.
+ * `health-data.ts` would close that import into a cycle. So the demo values stay there and
+ * the assembly happens here.
  *
  * ## Why a builder rather than a constant
- * Every duration rule in the engine compares timestamps against `now`, and the
- * freshness bounds are short — `window.maxStaleMs` is three minutes. A fixed array of
- * epoch timestamps would therefore be reported `stale` by every rule within minutes of
- * being written, and the demo would degrade into "no recent reading" cards. Anchoring
- * the window to a caller-supplied `now` keeps it fresh while staying a pure function,
- * so tests can pin an exact instant and get an exact assessment.
+ * Every duration rule in the engine compares timestamps against `now`, and the freshness
+ * bounds are short — `window.maxStaleMs` is three minutes. A fixed array of epoch timestamps
+ * would therefore be reported `stale` by every rule within minutes of being written, and the
+ * demo would degrade into "no recent reading" cards. Anchoring the window to a
+ * caller-supplied `now` keeps it fresh while staying a pure function, so tests can pin an
+ * exact instant and get an exact assessment.
  *
- * None of this is a sensor. When PRD §7.2.1 ingestion lands it replaces these two
- * functions with the real ring buffer and the cached weather observation; the engine
- * call site does not change.
+ * When PRD §7.2.1 ingestion lands it replaces `buildMockReadings` with the real ring buffer;
+ * the engine call site does not change.
  */
 
-import { ENVIRONMENT, VITALS } from '@/constants/health-data';
+import { VITALS } from '@/constants/health-data';
+import { toEnvironmentSnapshot, type LiveEnvironment } from '@/environment';
 import type { EnvironmentSnapshot, MotionSummary, SensorReading } from '@/risk';
 
 const SECOND = 1000;
-const MINUTE = 60 * SECOND;
 
 /**
- * Spacing between synthetic readings. PRD §7.2.1 polls Health Connect every 30–60 s,
- * and testing at 1 Hz instead is what previously hid two thresholds that could never
- * be satisfied on real hardware, so the demo window uses the real cadence.
+ * Spacing between synthetic readings. PRD §7.2.1 polls Health Connect every 30–60 s, and
+ * testing at 1 Hz instead is what previously hid two thresholds that could never be
+ * satisfied on real hardware, so the demo window uses the real cadence.
  */
 const INTERVAL_MS = 60 * SECOND;
 
@@ -52,11 +60,6 @@ const INTERVAL_MS = 60 * SECOND;
  * regime where a safety rule is silently unsatisfiable.
  */
 const LATEST_AGE_MS = 30 * SECOND;
-
-/** Matches `ENVIRONMENT.updatedAt`'s "12 min ago" — well inside `env.maxStaleMs`
- *  (60 min), which is deliberately far looser than the vitals bound because a weather
- *  observation half an hour old is still current while a heart rate is not. */
-const ENVIRONMENT_AGE_MS = 12 * MINUTE;
 
 /**
  * Number of readings. The engine's longest lookback is
@@ -81,8 +84,8 @@ const STILL: MotionSummary = { peakG: 1.04, minG: 0.97, rmsG: 1.0, sampleCount: 
 
 /**
  * Oldest → newest, one entry per reading. Values are ordinary and unremarkable on
- * purpose: the demo's one red card should come from the environment, so that anyone
- * reading the output can tell the heat flag apart from a physiological one.
+ * purpose: any red card on the Dashboard should come from the environment, so that anyone
+ * reading the output can tell a weather-driven flag apart from a physiological one.
  *
  * The series is deliberately *not* uniform. A constant series makes several distinct
  * bugs invisible — the newest sample coincides with the window's peak, so a rule that
@@ -103,15 +106,15 @@ const SKIN_TEMP_C = [
 /**
  * Sat down for a while, then got up.
  *
- * The trailing samples must be `ACTIVE`. At this demo's heat index — 56.4 °C, which is
- * NOAA Extreme Danger — a *trailing* still run over `stillness.heatCriticalMs` (10 min)
- * satisfies PRD §7.2.5's "extreme heat index with no motion for > 10 min", which fires
- * `heat.stillness.critical` and makes the assessment an SOS candidate. That is the
- * correct reading of such data, which is the point: the demo shows a person moving about
- * in dangerous heat, not one who has collapsed in it. Flipping the tail to `STILL` turns
- * this dashboard into an emergency, and `mock-sensor-window.test.ts` asserts both
- * directions — the escalation firing on a still tail is what proves the green fall card
- * here is a real negative rather than an unreachable rule.
+ * The trailing samples are `ACTIVE`, and that matters as soon as the weather is real. In
+ * genuinely extreme heat — a NOAA Extreme Danger heat index — a *trailing* still run over
+ * `stillness.heatCriticalMs` (10 min) satisfies PRD §7.2.5's "extreme heat index with no
+ * motion for > 10 min", which fires `heat.stillness.critical` and makes the assessment an
+ * SOS candidate. That is the correct reading of such data, which is the point: the demo
+ * window describes a person moving about, not one who has collapsed. Flipping the tail to
+ * `STILL` turns a hot day into an emergency, and `mock-sensor-window.test.ts` asserts both
+ * directions — the escalation firing on a still tail is what proves the green fall card is a
+ * real negative rather than an unreachable rule.
  *
  * The still stretch in the middle is 7 min of span. It is deliberately *not* trailing:
  * genuine stillness that the engine measures and reports, that correctly does not
@@ -145,29 +148,31 @@ export function buildMockReadings(now: number): SensorReading[] {
 }
 
 /**
- * The demo's weather observation, narrowed to what the engine consumes.
+ * The live weather observation, narrowed to what the engine consumes.
  *
- * Built field by field rather than spread from `ENVIRONMENT`, because most of that
- * constant — location, advisories, the pre-banded labels — is presentation the engine
- * must not read. `heatIndexC` is forwarded since a real provider's value outranks one
- * derived from a single temperature/humidity pair, and the engine re-bands it against
- * NOAA either way.
+ * The real adapter is `toEnvironmentSnapshot` in `@/environment`, which sits next to the
+ * `LiveEnvironment` type it narrows and documents why each field is or is not forwarded.
+ * This wrapper adds the one thing the engine call site needs on top of it: the feed is
+ * asynchronous, so before the first response there is genuinely no observation, and the
+ * engine takes `null` for that.
+ *
+ * `null` is not the same as an empty observation, and the difference is the whole point.
+ * With `null` the engine reports `dataQuality: 'missing'` for the heat category and declines
+ * to judge; a zero-filled snapshot would instead assert 0 °C at 0 % humidity and render a
+ * confident green "heat conditions are comfortable" card built on nothing.
+ *
+ * @param environment The current observation, or null before the first successful fetch.
  */
-export function buildMockEnvironment(now: number): EnvironmentSnapshot {
-  return {
-    tempC: ENVIRONMENT.tempC,
-    humidity: ENVIRONMENT.humidity,
-    heatIndexC: ENVIRONMENT.heatIndexC,
-    aqi: ENVIRONMENT.aqi,
-    observedAt: now - ENVIRONMENT_AGE_MS,
-  };
+export function buildEnvironmentSnapshot(
+  environment: LiveEnvironment | null,
+): EnvironmentSnapshot | null {
+  return environment === null ? null : toEnvironmentSnapshot(environment);
 }
 
 /** Exported for the tests that pin the demo's intended output. */
 export const MOCK_WINDOW = {
   intervalMs: INTERVAL_MS,
   latestAgeMs: LATEST_AGE_MS,
-  environmentAgeMs: ENVIRONMENT_AGE_MS,
   sampleCount: SAMPLE_COUNT,
   spanMs: (SAMPLE_COUNT - 1) * INTERVAL_MS,
   active: ACTIVE,

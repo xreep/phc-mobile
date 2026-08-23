@@ -1,7 +1,7 @@
 /**
  * Pins the demo sensor window and the assessment the Dashboard renders from it.
  *
- * Two jobs. The first is ordinary regression cover: the Home screen's cards are now
+ * Three jobs. The first is ordinary regression cover: the Home screen's cards are now
  * computed, so the values a reviewer sees on screen are only trustworthy if something
  * asserts what the engine returns for this fixture.
  *
@@ -13,22 +13,38 @@
  * escalation this fixture is built to avoid is asserted to fire when the motion that
  * suppresses it is removed, and the freshness margin that keeps it reachable is asserted
  * directly.
+ *
+ * The third is new with the live environment feed. The weather half of this window is no
+ * longer a constant: `buildEnvironmentSnapshot` narrows a real OpenWeatherMap observation.
+ * That introduces one more member of the same silent-failure family — an AQI arriving on the
+ * provider's 1–5 scale instead of the 0–500 scale the thresholds are written against — so the
+ * consequence of getting it wrong is asserted here, at the engine, rather than only at the
+ * fetch boundary.
  */
 
-import { ENVIRONMENT, VITALS } from '@/constants/health-data';
+import { VITALS } from '@/constants/health-data';
 import {
-  buildMockEnvironment,
+  buildEnvironmentSnapshot,
   buildMockReadings,
   MOCK_WINDOW,
 } from '@/constants/mock-sensor-window';
+import { FIXTURE_OBSERVATION_AGE_MS, liveEnvironment } from '@/environment/__tests__/fixtures';
 import { assessRisk, DEFAULT_RISK_THRESHOLDS as T } from '@/risk';
 import type { SensorReading } from '@/risk';
 
-/** Fixed instant, so every expectation below is exact. */
+/** Fixed instant, so every expectation below is exact. Matches the fixture's `FIXTURE_NOW`. */
 const NOW = 1_766_000_000_000;
 
+/**
+ * The observation the Dashboard would be holding: 38 °C at 62 % RH with an EPA AQI of 168,
+ * which are the conditions the retired `ENVIRONMENT` constant described. They are now test
+ * input rather than something the app ships, and the fixture *derives* the heat index from
+ * them, so the three numbers cannot drift apart.
+ */
+const LIVE = liveEnvironment();
+
 const readings = buildMockReadings(NOW);
-const environment = buildMockEnvironment(NOW);
+const environment = buildEnvironmentSnapshot(LIVE);
 const assessment = assessRisk({ readings, environment, now: NOW });
 
 const newest = readings[readings.length - 1];
@@ -36,7 +52,6 @@ const newest = readings[readings.length - 1];
 describe('mock sensor window', () => {
   it('is a pure function of `now`', () => {
     expect(buildMockReadings(NOW)).toEqual(readings);
-    expect(buildMockEnvironment(NOW)).toEqual(environment);
 
     // Shifting the anchor shifts every timestamp by the same amount and changes nothing
     // else — the fixture carries no hidden clock read.
@@ -93,16 +108,67 @@ describe('mock sensor window', () => {
     expect(Math.max(...hrValues)).toBeGreaterThan(Math.min(...hrValues));
     expect(Math.max(...hrValues)).toBeGreaterThan(newest.hr as number);
   });
+});
 
-  it('forwards only the environment fields the engine consumes', () => {
+describe('the live environment the window is paired with', () => {
+  it('forwards only the measurements the engine consumes', () => {
     expect(environment).toEqual({
-      tempC: ENVIRONMENT.tempC,
-      humidity: ENVIRONMENT.humidity,
-      heatIndexC: ENVIRONMENT.heatIndexC,
-      aqi: ENVIRONMENT.aqi,
-      observedAt: NOW - MOCK_WINDOW.environmentAgeMs,
+      tempC: LIVE.tempC,
+      humidity: LIVE.humidity,
+      aqi: LIVE.aqi,
+      observedAt: NOW - FIXTURE_OBSERVATION_AGE_MS,
     });
-    expect(MOCK_WINDOW.environmentAgeMs).toBeLessThan(T.env.maxStaleMs);
+    expect(FIXTURE_OBSERVATION_AGE_MS).toBeLessThan(T.env.maxStaleMs);
+  });
+
+  it('narrows nothing when there is no observation yet', () => {
+    // The feed is asynchronous, so before the first response there genuinely is no weather,
+    // and `null` is the only honest input.
+    expect(buildEnvironmentSnapshot(null)).toBeNull();
+  });
+
+  it('declines to judge heat rather than reporting comfortable conditions', () => {
+    const blind = assessRisk({ readings, environment: null, now: NOW });
+    const heat = blind.byCategory.heat;
+
+    // A zero-filled snapshot would instead assert 0 °C at 0 % humidity and render a
+    // confident green "comfortable" card built on nothing at all. `level` is green either
+    // way — it is the only level available — so `dataQuality` carries the whole difference.
+    expect(heat.dataQuality).toBe('missing');
+    expect(heat.flagged).toBe(false);
+    expect(blind.heatIndexC).toBeNull();
+    expect(heat.metric).toBe('Heat index —');
+    expect(heat.guidance).not.toMatch(/comfortable|normal range/i);
+  });
+});
+
+describe('the AQI scale reaching the engine', () => {
+  /** The reported respiratory multiplier for a given AQI, all else held equal. */
+  function multiplierFor(aqi: number | null) {
+    return assessRisk({
+      readings,
+      environment: buildEnvironmentSnapshot(liveEnvironment({ aqi })),
+      now: NOW,
+    }).byCategory.respiratory.envMultiplier;
+  }
+
+  it('amplifies on the 0–500 scale the thresholds are written against', () => {
+    // 168 → (168 − 100) / (300 − 100) × (1.3 − 1) + 1.
+    expect(multiplierFor(168)).toBeCloseTo(1.102, 3);
+  });
+
+  it('would silently stop amplifying if the provider’s 1–5 band were forwarded raw', () => {
+    // This is the failure the EPA computation in `@/environment` exists to prevent, asserted
+    // at the place it would actually be felt. OpenWeatherMap reports the same dirty air as
+    // `main.aqi: 4`, and `respiratory.ts`'s `aqi <= env.aqiNeutralBelow` is then permanently
+    // true — no throw, no log, no failing test, and PRD §7.2.3's environmental amplification
+    // simply never happens. Pinning both numbers is what makes the regression loud.
+    expect(multiplierFor(4)).toBe(1);
+    expect(multiplierFor(4)).toBeLessThan(multiplierFor(168));
+  });
+
+  it('does not amplify when air quality is missing, rather than treating it as clean', () => {
+    expect(multiplierFor(null)).toBe(1);
   });
 });
 
@@ -122,7 +188,10 @@ describe('the assessment the Dashboard renders', () => {
   });
 
   it('bands the heat index against NOAA', () => {
-    expect(assessment.heatIndexC).toBe(ENVIRONMENT.heatIndexC);
+    // The engine derives its own heat index from `tempC` and `humidity`; the snapshot
+    // deliberately does not carry one. Equality with the observation's is the property that
+    // makes the omission safe — `service.test.ts` asserts the same thing end to end.
+    expect(assessment.heatIndexC).toBe(LIVE.heatIndexC);
     expect(assessment.heatIndexBand?.label).toBe('Extreme Danger');
     expect(assessment.heatIndexOutOfDomain).toBe(false);
   });

@@ -101,9 +101,10 @@ export type SensorReading = {
 };
 
 /**
- * Environment input (PRD §7.2.3). Field names match `EnvironmentData` exactly, so
- * the existing `ENVIRONMENT` constant — and later the env module's cached value —
- * are structurally assignable with no adapter.
+ * Environment input (PRD §7.2.3). Deliberately narrower than the observation the app holds:
+ * `@/environment`'s `toEnvironmentSnapshot` narrows a `LiveEnvironment` down to these
+ * measurements and drops everything presentational, so no rule can key off a place name or a
+ * band label this engine did not derive itself.
  */
 export type EnvironmentSnapshot = {
   /** Ambient dry-bulb temperature, °C. */
@@ -111,8 +112,10 @@ export type EnvironmentSnapshot = {
   /** Relative humidity, percent (0–100) — not a 0–1 fraction. */
   readonly humidity: number;
   /**
-   * Trusted-upstream heat index override in °C (e.g. OpenWeatherMap `feels_like`).
-   * When absent the engine computes it from `tempC`/`humidity`.
+   * Trusted-upstream heat index override in °C. When absent the engine computes it from
+   * `tempC`/`humidity`, which is what the OpenWeatherMap adapter relies on — the provider
+   * publishes no NOAA heat index, and its `feels_like` is a *different* model, so passing
+   * that here would put a figure the screen bands as NOAA next to one that is not.
    */
   readonly heatIndexC?: number;
   /** Air quality index. Unused by Tier 1; reserved for the respiratory multiplier. */

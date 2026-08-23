@@ -37,9 +37,9 @@ export type HeatIndexBandLabel =
   | 'Extreme Danger';
 
 /**
- * Structurally assignable to `EnvironmentData['heatIndexBand']`
- * (`{ label: string; level: RiskLevel }`), so `src/app/environment.tsx` renders
- * engine output through its existing `LevelChip` with no mapping layer.
+ * Structurally `{ label: string; level: RiskLevel }`, which is what
+ * `LiveEnvironment['heatIndexBand']` holds, so `src/app/environment.tsx` renders it through
+ * its `LevelChip` with no mapping layer.
  */
 export type HeatIndexBand = {
   readonly label: HeatIndexBandLabel;

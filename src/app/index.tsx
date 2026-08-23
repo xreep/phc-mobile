@@ -8,6 +8,7 @@ import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
 import { useRiskAssessment } from '@/hooks/use-risk-assessment';
 import type { SensorSource } from '@/risk';
+import { formatAge } from '@/utils/format';
 
 function Stat({ value, unit, label }: { value: string; unit: string; label: string }) {
   return (
@@ -27,19 +28,6 @@ function Stat({ value, unit, label }: { value: string; unit: string; label: stri
 
 /** Placeholder for a vital the current reading does not carry. */
 const ABSENT = '—';
-
-/**
- * Coarse relative age. Rounded to the unit being shown rather than to the nearest
- * minute throughout, so a 30-second-old reading reads "30s ago" instead of collapsing
- * to "0 min ago".
- */
-function formatAge(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return 'just now';
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  return minutes === 1 ? '1 min ago' : `${minutes} min ago`;
-}
 
 function sourceLabel(source: SensorSource): string {
   return SENSOR_SOURCES.find((option) => option.key === source)?.label ?? source;
