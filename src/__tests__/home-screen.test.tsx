@@ -18,12 +18,20 @@
  * below therefore vary the *fetched* observation and assert the card follows it — cool, clean
  * air must turn the red card green — because a card that cannot change is indistinguishable
  * from one that is right.
+ *
+ * The vitals row (PRD §7.2.1 extension) needs the same treatment and cannot get it from the
+ * weather, which it does not read. Its only input is the reading buffer, so `buildMockReadings`
+ * is mocked through to the real implementation by default and overridden in one test, which is
+ * what makes "+16%" — a string composed inside `risk/baseline.ts` from a mean the fixture never
+ * states — reachable on the real screen. The shipped window is deliberately quiet, so without
+ * that override every row assertion here would pass against a hardcoded "In line".
  */
 
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import HomeScreen from '@/app/index';
+import { buildMockReadings } from '@/constants/mock-sensor-window';
 import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
 import { liveEnvironment } from '@/environment/__tests__/fixtures';
 import { EnvironmentProvider } from '@/environment/provider';
@@ -38,8 +46,27 @@ jest.mock('@/environment', () => ({
   readCachedEnvironment: jest.fn(),
 }));
 
+// `buildEnvironmentSnapshot` stays real — only the reading buffer is swappable, and it defaults
+// to the real fixture in the file-level `beforeEach` below.
+jest.mock('@/constants/mock-sensor-window', () => ({
+  ...jest.requireActual('@/constants/mock-sensor-window'),
+  buildMockReadings: jest.fn(),
+}));
+
+const actualWindow =
+  jest.requireActual<typeof import('@/constants/mock-sensor-window')>(
+    '@/constants/mock-sensor-window',
+  );
+
 const mockedFetch = fetchLiveEnvironment as jest.MockedFunction<typeof fetchLiveEnvironment>;
 const mockedRead = readCachedEnvironment as jest.MockedFunction<typeof readCachedEnvironment>;
+const mockedReadings = buildMockReadings as jest.MockedFunction<typeof buildMockReadings>;
+
+/** Runs before every `describe`'s own hook, so the default really is the shipped window. */
+beforeEach(() => {
+  mockedReadings.mockReset();
+  mockedReadings.mockImplementation(actualWindow.buildMockReadings);
+});
 
 /** Frozen instant, so the derived "updated" line is exact. Matches the fixture's anchor. */
 const NOW = 1_766_000_000_000;
@@ -131,6 +158,36 @@ describe('Home dashboard', () => {
     expect(getByText('78')).toBeTruthy();
     expect(getByText('97')).toBeTruthy();
     expect(getByText('36.8')).toBeTruthy();
+  });
+
+  it('shows each vital against its own rolling average over the same window', async () => {
+    const { getAllByText, getByText } = await renderHome();
+
+    // One delta line per vital, and one sentence under the row. The horizon in that sentence is
+    // derived from `window.ms` inside the engine — nothing on the screen or in the fixture
+    // spells out "10-minute" — which is what makes it a wiring assertion rather than a
+    // spelling one.
+    expect(getAllByText('In line')).toHaveLength(3);
+    expect(getByText('In line with your 10-minute average.')).toBeTruthy();
+  });
+
+  it('reports a deviation on the screen when the readings actually move', async () => {
+    // The shipped window is quiet by design, so this is the only place the Dashboard can be
+    // shown to report a deviation at all. The same 20 bpm the fixture tests use, confined to the
+    // newest four minutes: `risk/baseline.ts` turns it into 16 % against an 84.4 bpm mean, and
+    // neither number exists anywhere in the app's source.
+    mockedReadings.mockImplementation((now) =>
+      actualWindow.buildMockReadings(now).map((sample) => ({
+        ...sample,
+        hr: sample.timestamp > now - 4 * 60_000 ? (sample.hr as number) + 20 : sample.hr,
+      })),
+    );
+
+    const { getByText } = await renderHome();
+
+    expect(getByText('98')).toBeTruthy();
+    expect(getByText('+16%')).toBeTruthy();
+    expect(getByText('Heart rate is 16% above your 10-minute average.')).toBeTruthy();
   });
 
   it('derives the freshness line from the reading it evaluated', async () => {

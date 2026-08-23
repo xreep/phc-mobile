@@ -29,9 +29,27 @@
  * It also never *acts*. Critical rules are reported through `criticalRules` and
  * `sosCandidate`; the 30-second cancel window, GPS, messaging, and the consent gate all
  * belong to the SOS module.
+ *
+ * ## `computeVitalBaselines` is the one export that is not a judgement
+ * PRD §7.2.1's baseline extension describes the same readings rather than assessing them — it
+ * returns no level, no score, and no rule id, and nothing downstream may treat a deviation as
+ * a seventh risk signal. It lives here because it needs the same thresholds, the same
+ * plausibility gate, and the same window primitives; it is deliberately not part of
+ * `RiskAssessment`, and it takes an assessment as *input* so the two cannot describe different
+ * stretches of time.
  */
 
 export { assessRisk } from './assess';
+
+export {
+  computeVitalBaselines,
+  formatWindowLabel,
+  type BaselineDelta,
+  type BaselineDirection,
+  type BaselineReport,
+  type VitalBaselineInput,
+  type VitalBaselines,
+} from './baseline';
 
 export {
   DEFAULT_RISK_THRESHOLDS,
@@ -80,3 +98,6 @@ export type {
   SensorSource,
   TimedValue,
 } from './types';
+
+/** Part of `BaselineDelta`'s surface, so consumers can name the field they are handed. */
+export type { VitalField } from './window';

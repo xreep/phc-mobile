@@ -31,7 +31,13 @@ import { useMemo } from 'react';
 import { buildEnvironmentSnapshot, buildMockReadings } from '@/constants/mock-sensor-window';
 import { useEnvironmentFeed } from '@/environment/provider';
 import { useNow } from '@/hooks/use-now';
-import { assessRisk, type RiskAssessment, type SensorReading } from '@/risk';
+import {
+  assessRisk,
+  computeVitalBaselines,
+  type RiskAssessment,
+  type SensorReading,
+  type VitalBaselines,
+} from '@/risk';
 
 /** Matches the simulated sensor cadence, so the window advances a sample per tick. */
 export const RE_EVALUATE_INTERVAL_MS = 60 * 1000;
@@ -44,6 +50,13 @@ export type DashboardRisk = {
    * able to say so rather than render a stale number.
    */
   readonly latest: SensorReading | null;
+  /**
+   * Each vital against its own rolling average over the same window (PRD §7.2.1 extension).
+   *
+   * Computed here rather than in the component so the Dashboard stays a renderer, and computed
+   * from `assessment` so the row and the cards are guaranteed to describe one window.
+   */
+  readonly baselines: VitalBaselines;
 };
 
 export function useRiskAssessment(): DashboardRisk {
@@ -57,6 +70,10 @@ export function useRiskAssessment(): DashboardRisk {
       environment: buildEnvironmentSnapshot(environment),
       now,
     });
-    return { assessment, latest: readings.at(-1) ?? null };
+    return {
+      assessment,
+      latest: readings.at(-1) ?? null,
+      baselines: computeVitalBaselines({ readings, assessment }),
+    };
   }, [environment, now]);
 }

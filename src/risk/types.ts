@@ -532,6 +532,52 @@ export type RiskThresholds = {
     /** Readings above the arm threshold required, independent of the span. */
     readonly minSustainedSamples: number;
   };
+  /**
+   * Personal baseline tracking (PRD §7.2.1 extension).
+   *
+   * Not a rule. Nothing here fires, scores, or escalates — this group sizes the *display*
+   * comparison between the newest reading and the rolling average of the window it came from.
+   * See `src/risk/baseline.ts` for why each vital is reported in a different unit.
+   *
+   * There is no `windowMs` in this group on purpose: the comparison spans exactly
+   * `RiskAssessment.windowMs`, taken from the assessment itself, so the row and the cards
+   * above it can never describe two different stretches of time.
+   *
+   * The three `minDelta*` values are **deadbands**, not thresholds. Their only job is to stop
+   * the Dashboard reporting a difference smaller than the sensor can resolve, and each is in
+   * its own vital's unit because a percentage is only meaningful for one of the three.
+   */
+  readonly baseline: {
+    /**
+     * Samples the average must be built from, *excluding* the newest reading.
+     *
+     * **Must not exceed `floor(window.ms / window.maxGapMs)`** — `resolveRiskThresholds`
+     * clamps it. At the coarsest cadence the engine treats as continuous coverage a window
+     * holds `floor(ms / maxGapMs) + 1` readings, and one of those is spent being the current
+     * value. A larger floor is unreachable there, so the row would read "not enough readings
+     * yet" forever — the cadence-versus-count trap, in the display layer this time.
+     */
+    readonly minBaselineSamples: number;
+    /**
+     * Smallest heart-rate difference worth reporting, bpm.
+     *
+     * Clamped on resolve into `[plausible.hr.max / 100, dehydration.riseBpm]`, floor first so it
+     * wins a conflict. The floor is 1 % of the widest baseline the plausibility gate admits, and
+     * below it a reportable difference rounds to "+0%" — a sentence with no content. The ceiling
+     * keeps the deadband from being the reason the row is quieter than the rules beside it.
+     */
+    readonly minDeltaBpm: number;
+    /**
+     * Smallest SpO₂ difference worth reporting, in percentage **points** — never a percent.
+     * Clamped up to 1 on resolve, the finest step the row prints.
+     */
+    readonly minDeltaSpo2Pct: number;
+    /**
+     * Smallest skin-temperature difference worth reporting, °C. Clamped up to 0.1 on resolve,
+     * the finest step the row prints.
+     */
+    readonly minDeltaSkinTempC: number;
+  };
   readonly window: {
     /**
      * Readings older than this (relative to `now`) are ignored.

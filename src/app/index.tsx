@@ -1,10 +1,10 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 
-import { Card } from '@/components/card';
 import { RiskCard } from '@/components/risk-card';
 import { Screen } from '@/components/screen';
 import { SosAlert } from '@/components/sos-alert';
 import { ThemedText } from '@/components/themed-text';
+import { VitalsCard } from '@/components/vitals-card';
 import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
 import { useRiskAssessment } from '@/hooks/use-risk-assessment';
@@ -12,31 +12,12 @@ import { useSos } from '@/hooks/use-sos';
 import type { SensorSource } from '@/risk';
 import { formatAge } from '@/utils/format';
 
-function Stat({ value, unit, label }: { value: string; unit: string; label: string }) {
-  return (
-    <View style={styles.stat}>
-      <View style={styles.statValueRow}>
-        <ThemedText style={styles.statValue}>{value}</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          {unit}
-        </ThemedText>
-      </View>
-      <ThemedText type="small" themeColor="textSecondary">
-        {label}
-      </ThemedText>
-    </View>
-  );
-}
-
-/** Placeholder for a vital the current reading does not carry. */
-const ABSENT = '—';
-
 function sourceLabel(source: SensorSource): string {
   return SENSOR_SOURCES.find((option) => option.key === source)?.label ?? source;
 }
 
 export default function HomeScreen() {
-  const { assessment, latest } = useRiskAssessment();
+  const { assessment, latest, baselines } = useRiskAssessment();
 
   // The engine reports critical triggers and never acts; this is the one place that hands
   // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all
@@ -53,26 +34,9 @@ export default function HomeScreen() {
 
   return (
     <Screen title="Dashboard" subtitle={subtitle}>
-      <Card>
-        <ThemedText type="smallBold">Current vitals</ThemedText>
-        <View style={styles.statsRow}>
-          <Stat
-            value={latest?.hr === undefined ? ABSENT : String(Math.round(latest.hr))}
-            unit="bpm"
-            label="Heart rate"
-          />
-          <Stat
-            value={latest?.spo2 === undefined ? ABSENT : String(Math.round(latest.spo2))}
-            unit="%"
-            label="SpO₂"
-          />
-          <Stat
-            value={latest?.skinTempC === undefined ? ABSENT : latest.skinTempC.toFixed(1)}
-            unit="°C"
-            label="Skin temp"
-          />
-        </View>
-      </Card>
+      {/* Both props come from the same `useRiskAssessment` memo, so the numbers and the
+          averages they are compared against describe one evaluation (PRD §7.2.1 ext). */}
+      <VitalsCard latest={latest} baselines={baselines} />
 
       <ThemedText type="smallBold">Risk overview</ThemedText>
       {/* Levels, colours, guidance, and metrics all come from the Tier-1 rule engine
@@ -100,23 +64,6 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  stat: {
-    gap: Spacing.half,
-  },
-  statValueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: Spacing.one,
-  },
-  statValue: {
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: 700,
-  },
   sos: {
     backgroundColor: '#C1121F',
     borderRadius: Spacing.four,

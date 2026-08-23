@@ -29,7 +29,7 @@ import {
   MOCK_WINDOW,
 } from '@/constants/mock-sensor-window';
 import { FIXTURE_OBSERVATION_AGE_MS, liveEnvironment } from '@/environment/__tests__/fixtures';
-import { assessRisk, DEFAULT_RISK_THRESHOLDS as T } from '@/risk';
+import { assessRisk, computeVitalBaselines, DEFAULT_RISK_THRESHOLDS as T } from '@/risk';
 import type { SensorReading } from '@/risk';
 
 /** Fixed instant, so every expectation below is exact. Matches the fixture's `FIXTURE_NOW`. */
@@ -392,5 +392,134 @@ describe('the advisory cards on the demo screen are reachable negatives', () => 
     // could then be deleted without a test noticing.
     expect(drifting.byCategory.fatigue.rule).toBeNull();
     expect(sustained.byCategory.dehydration.rule).toBeNull();
+  });
+});
+
+/**
+ * The vitals row's rolling averages over the same window (PRD §7.2.1 extension).
+ *
+ * Two questions here that `risk/__tests__/baseline.test.ts` cannot answer, because it builds its
+ * own synthetic windows. The first is what the *shipped* window actually says, which is what a
+ * reviewer sees on the demo screen. The second is what the row says next to the advisory cards,
+ * which read 15 and 18 minutes of the same buffer against baselines split a different way — and
+ * therefore can, correctly, disagree with it.
+ */
+describe('the personal baselines the vitals row shows for this window', () => {
+  /** The shipped window, motion removed, with `hr` transformed by `raise`. Mirrors the helper in
+   *  the block above; kept local so neither block's fixtures can drift into the other's. */
+  function variant(raise: (hr: number, timestamp: number) => number): SensorReading[] {
+    return buildMockReadings(NOW).map((reading) => ({
+      ...reading,
+      motionSummary: MOCK_WINDOW.still,
+      hr: raise(reading.hr as number, reading.timestamp),
+    }));
+  }
+
+  function baselinesOf(input: readonly SensorReading[]) {
+    return computeVitalBaselines({
+      readings: input,
+      assessment: assessRisk({ readings: input, environment, now: NOW }),
+    });
+  }
+
+  const baselines = computeVitalBaselines({ readings, assessment });
+  const [hr, spo2, skinTemp] = baselines.vitals;
+
+  it('describes the same window the cards were computed over', () => {
+    expect(baselines.windowMs).toBe(assessment.windowMs);
+    expect(baselines.evaluatedAt).toBe(assessment.evaluatedAt);
+    expect(baselines.windowLabel).toBe('10-minute');
+  });
+
+  it('averages ten of the twenty readings, because the window is half the buffer', () => {
+    // The buffer deliberately reaches back further than any single lookback. The row must read
+    // only its own ten minutes of it, or "your 10-minute average" is not one.
+    expect(readings).toHaveLength(20);
+    for (const vital of baselines.vitals) {
+      expect(vital.sampleCount).toBe(10);
+      expect(vital.baselineCount).toBe(9);
+      expect(vital.dataQuality).toBe('ok');
+    }
+  });
+
+  it('is a quiet window on every vital — which is why the card has its own test file', () => {
+    // Every difference here is a fraction of its deadband, so nothing rendered from the shipped
+    // fixture can show that a deviation reaches the screen at all. Pinned rather than described,
+    // because the moment one of these numbers moves the demo screen changes and the component
+    // tests in `components/__tests__/vitals-card.test.tsx` are the only cover for the other
+    // states.
+    expect(hr.current).toBe(78);
+    expect(hr.baseline).toBeCloseTo(77.778, 3);
+    expect(hr.percentDelta).toBeCloseTo(0.286, 3);
+    expect(spo2.delta).toBeCloseTo(-0.222, 3);
+    // Exactly zero: the nine history temperatures average to 36.8 to the last bit.
+    expect(skinTemp.delta).toBeCloseTo(0, 6);
+
+    for (const vital of baselines.vitals) {
+      expect(vital.meaningful).toBe(false);
+      expect(vital.short).toBe('In line');
+      expect(Math.abs(vital.noiseMultiple)).toBeLessThan(1);
+    }
+    expect(baselines.headline).toBe('In line with your 10-minute average.');
+  });
+
+  it('agrees with the dehydration card’s baseline where they overlap', () => {
+    // Two baselines for the same vital appear on one screen, four cards apart. On this window
+    // they land on the same rounded number, and that is worth pinning: a reviewer who saw 78 in
+    // one place and 74 in the other would reasonably read it as a bug.
+    expect(Math.round(hr.baseline as number)).toBe(78);
+    expect(assessment.byCategory.dehydration.metric).toBe('HR +0 bpm vs baseline 78');
+  });
+
+  it('stays in line while the dehydration card reports a 22 bpm rise — both correct', () => {
+    // **This divergence is the design, not a defect.** The rise fills the newest nine of the ten
+    // minutes the row reads, so it is almost entirely inside the row's own average and barely
+    // visible against it: 2.4 bpm. Dehydration reads fifteen minutes and splits its baseline by
+    // *count* — the oldest 40 % of samples — so the same rise sits almost entirely outside its
+    // baseline and reads as 22.
+    //
+    // Widening the row's window to 18 minutes would collapse the two, and was rejected: the
+    // brief specifies "the current sensor window", which in this engine is `window.ms`. What
+    // keeps the pair honest instead is that every string names its horizon, so the screen reads
+    // "in line with your 10-minute average" beside "HR +22 bpm vs baseline 78" rather than two
+    // bare, contradictory claims.
+    const drifting = variant((value, timestamp) =>
+      timestamp > NOW - 9 * 60_000 ? value + 20 : value,
+    );
+
+    expect(baselinesOf(drifting).vitals[0].short).toBe('In line');
+    expect(baselinesOf(drifting).vitals[0].delta).toBeCloseTo(2.444, 3);
+    expect(assessRisk({ readings: drifting, environment, now: NOW }).byCategory.dehydration.metric)
+      .toBe('HR +22 bpm vs baseline 78');
+  });
+
+  it('stays in line when the whole window is raised, because a baseline is relative', () => {
+    // +20 bpm everywhere. The fatigue card fires on it; the row does not, and should not — the
+    // user's recent average *is* 98, and reporting a deviation from it would be false. This is
+    // the limit of what a window-relative statistic can see, and it is why the row is a
+    // description rather than a seventh rule.
+    const sustained = variant((value) => value + 20);
+    const result = baselinesOf(sustained);
+
+    expect(result.vitals[0].current).toBe(98);
+    expect(result.vitals[0].baseline).toBeCloseTo(97.778, 3);
+    expect(result.vitals[0].short).toBe('In line');
+    expect(assessRisk({ readings: sustained, environment, now: NOW }).byCategory.fatigue.level).toBe(
+      'amber',
+    );
+  });
+
+  it('speaks when the rise is recent enough to stand out from its own average', () => {
+    // The reachable positive for this fixture family, and the answer to "can this row ever say
+    // anything on the demo window". Confining the same 20 bpm to the newest four minutes leaves
+    // six minutes of quiet baseline underneath it.
+    const recent = variant((value, timestamp) => (timestamp > NOW - 4 * 60_000 ? value + 20 : value));
+    const vital = baselinesOf(recent).vitals[0];
+
+    expect(vital.baseline).toBeCloseTo(84.444, 3);
+    expect(vital.percentDelta).toBeCloseTo(16.053, 3);
+    expect(vital.meaningful).toBe(true);
+    expect(vital.short).toBe('+16%');
+    expect(vital.summary).toBe('Heart rate is 16% above your 10-minute average.');
   });
 });

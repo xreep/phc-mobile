@@ -323,6 +323,50 @@ export const DEFAULT_RISK_THRESHOLDS: RiskThresholds = {
     minSustainedSamples: 5,
   },
 
+  baseline: {
+    /**
+     * DERIVED: 3 samples behind the current one — the same floor `dehydration.baselineFraction`
+     * uses, and for the same reason: a "rolling average" of one or two readings is not an
+     * average, it is a second reading with extra ceremony.
+     *
+     * Must stay at or under `floor(window.ms / window.maxGapMs)` = 5, which it does, so the
+     * shipped value needs no repair. That matters because `resolveRiskThresholds` returns these
+     * defaults untouched when a caller passes no overrides — anything relying on the clamp
+     * would never be clamped in production.
+     */
+    minBaselineSamples: 3,
+    /**
+     * DERIVED: 7 bpm. One resting mean-absolute-error width for consumer optical heart rate —
+     * the same figure that sizes `heartRate.tachycardiaReleaseAbove`,
+     * `fatigue.restingHrReleaseAbove`, and `dehydration.riseReleaseBpm`. A threshold inside the
+     * noise floor is not a threshold, and a *reported difference* inside it is worse: it is the
+     * app inventing a physiological event out of PPG jitter, in a sentence a user will believe.
+     *
+     * On a 77 bpm baseline this is a 9 % change, so the row stays quiet through the ±3 % wobble
+     * a wrist sensor produces while its wearer does nothing at all.
+     */
+    minDeltaBpm: 7,
+    /**
+     * DERIVED: 2 percentage points. SpO₂ is reported and stored as an integer, so a 1-point
+     * difference is inside quantization alone — indistinguishable from the same true value
+     * landing on either side of a rounding boundary. 2 is therefore the smallest difference
+     * that can carry any information, quite apart from the ±2–3 point ARMS error that
+     * FDA-cleared oximeters are allowed and consumer wrist sensors exceed.
+     */
+    minDeltaSpo2Pct: 2,
+    /**
+     * DERIVED: 0.3 °C. Wrist skin temperature moves this much from a sleeve shifting, a breeze,
+     * or a strap loosening, with nothing happening inside the wearer. Below it the row would
+     * track the weather and the watchband rather than the person.
+     *
+     * Worth noting that skin temperature drives no rule in this engine — `plausible.skinTempC`
+     * is the only threshold that mentions it. This comparison is the only interpretation the
+     * app offers for that number, which is a reason to report it carefully rather than a reason
+     * to leave it out.
+     */
+    minDeltaSkinTempC: 0.3,
+  },
+
   window: {
     /**
      * DERIVED: 10 minutes. Must exceed `heartRate.sustainedForMs` (see the type doc —
@@ -437,6 +481,13 @@ export function resolveRiskThresholds(overrides?: PartialRiskThresholds): RiskTh
     heartRate.tachycardiaAbove,
   );
 
+  // Hoisted out of the object literal because the baseline group is sized against all three:
+  // it borrows the *repaired* window and dehydration values, so a caller who widens one of
+  // those moves the display's floors with it instead of leaving them behind.
+  const resolvedWindow = window.ms >= minimumWindowMs ? window : { ...window, ms: minimumWindowMs };
+  const dehydration = repairDehydration(mergeGroup(base.dehydration, overrides.dehydration), window);
+  const plausible = mergeGroup(base.plausible, overrides.plausible);
+
   return {
     spo2: mergeGroup(base.spo2, overrides.spo2),
     heartRate:
@@ -448,12 +499,17 @@ export function resolveRiskThresholds(overrides?: PartialRiskThresholds): RiskTh
         ? fall
         : { ...fall, stillnessWindowMs: minimumStillnessWindowMs },
     stillness: mergeGroup(base.stillness, overrides.stillness),
-    dehydration: repairDehydration(mergeGroup(base.dehydration, overrides.dehydration), window),
+    dehydration,
     fatigue: repairFatigue(mergeGroup(base.fatigue, overrides.fatigue), window),
-    window:
-      window.ms >= minimumWindowMs ? window : { ...window, ms: minimumWindowMs },
+    baseline: repairBaseline(
+      mergeGroup(base.baseline, overrides.baseline),
+      resolvedWindow,
+      dehydration,
+      plausible,
+    ),
+    window: resolvedWindow,
     env: mergeGroup(base.env, overrides.env),
-    plausible: mergeGroup(base.plausible, overrides.plausible),
+    plausible,
   };
 }
 
@@ -517,5 +573,65 @@ function repairFatigue(
     ...group,
     restingHrReleaseAbove: Math.min(group.restingHrReleaseAbove, group.restingHrAbove),
     windowMs: Math.max(group.windowMs, minimumWindowMs),
+  };
+}
+
+/** Smallest SpO₂ difference the row can print: the points are rendered to whole numbers. */
+const MIN_RENDERABLE_SPO2_PCT = 1;
+/** Smallest skin-temperature difference the row can print: degrees are rendered to one place. */
+const MIN_RENDERABLE_SKIN_TEMP_C = 0.1;
+
+/**
+ * The unsatisfiable-threshold trap once more, now in the display layer — where it is *harder*
+ * to notice, because a row that never reports a difference looks like a calm patient rather
+ * than a broken feature.
+ *
+ * Three repairs, two shapes:
+ *
+ * 1. **A sample floor the cadence cannot reach.** Identical to the rule layer's version, with
+ *    one sample of the window spent being the current value rather than part of the average.
+ * 2. **A deadband below the smallest difference the card can render.** This is the one that is
+ *    genuinely new. Every `minDelta*` is also a *rounding* boundary downstream: heart rate
+ *    prints as a whole percent, SpO₂ as whole points, skin temperature to one decimal. Let a
+ *    deadband fall under that and the row starts emitting "Heart rate is 0% above your
+ *    10-minute average" — a sentence that is grammatical, confident, and empty. The floors
+ *    below make that unrepresentable rather than unlikely, and because the heart-rate floor is
+ *    derived from the same `plausible.hr` the mean is bounded by, it holds however that range
+ *    is configured.
+ * 3. **A deadband coarser than the engine beside it.** `minDeltaBpm` above
+ *    `dehydration.riseBpm` would leave the row quieter than the smallest heart-rate change any
+ *    rule treats as significant. Note what this does *not* claim: the row and that advisory
+ *    read different horizons — 10 minutes against 15 — so a rise can legitimately show on one
+ *    and not the other, and `baseline.test.ts` pins that case. What the clamp rules out is the
+ *    *deadband* being the reason for the silence.
+ *
+ * Where 2 and 3 conflict — reachable only by overriding `dehydration.riseBpm` down into the
+ * noise floor — 2 wins. A slightly-too-coarse deadband is a judgement call; a card that prints
+ * a zero and calls it a finding is a defect.
+ */
+function repairBaseline(
+  group: RiskThresholds['baseline'],
+  window: RiskThresholds['window'],
+  dehydration: RiskThresholds['dehydration'],
+  plausible: RiskThresholds['plausible'],
+): RiskThresholds['baseline'] {
+  // `floor(ms / maxGapMs) + 1` readings fit at the widest gap the engine calls continuous, and
+  // the newest is the value being compared. `fatigue.test.ts` asserts the same bound for the
+  // rule layer's sample counts. Never below 1 — an average of one reading is a poor average,
+  // but an unreachable floor is not an average at all.
+  const reachableBaselineSamples = Math.max(1, Math.floor(window.ms / window.maxGapMs));
+
+  // 1 % of the widest baseline `plausible.hr` admits. Any smaller difference rounds to 0 %.
+  const minRenderableBpm = plausible.hr.max / 100;
+
+  return {
+    ...group,
+    minBaselineSamples: Math.min(
+      Math.max(Math.floor(group.minBaselineSamples), 1),
+      reachableBaselineSamples,
+    ),
+    minDeltaBpm: Math.max(Math.min(group.minDeltaBpm, dehydration.riseBpm), minRenderableBpm),
+    minDeltaSpo2Pct: Math.max(group.minDeltaSpo2Pct, MIN_RENDERABLE_SPO2_PCT),
+    minDeltaSkinTempC: Math.max(group.minDeltaSkinTempC, MIN_RENDERABLE_SKIN_TEMP_C),
   };
 }
