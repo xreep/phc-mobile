@@ -212,6 +212,117 @@ export const DEFAULT_RISK_THRESHOLDS: RiskThresholds = {
     heatCriticalMs: 10 * MINUTE,
   },
 
+  dehydration: {
+    /**
+     * SPEC-adjacent: 90 °F is NOAA's Extreme Caution floor, the same table PRD §7.2.2's
+     * heat flag is drawn from. Chosen as the *lowest* published band that implies real
+     * sweat loss, because the point of this advisory is the range where the mandated heat
+     * flag (103 °F) is still silent.
+     */
+    exposureMinF: 90,
+    /**
+     * DERIVED: 15 minutes. Cardiovascular drift under heat load develops over roughly
+     * 10–30 minutes, so a window shorter than this cannot distinguish drift from the
+     * ordinary minute-to-minute variation in resting HR.
+     *
+     * The floor `resolveRiskThresholds` enforces is
+     * `(sustainedForMs + maxGapMs) / (1 − baselineFraction)` = 7 min / 0.6 ≈ 11 min 40 s,
+     * so 15 minutes carries real slack rather than sitting on the boundary.
+     */
+    windowMs: 15 * MINUTE,
+    /**
+     * DERIVED: 0.4. The oldest 40 % of the window's samples establish the baseline; the
+     * newest 60 % is where a drift run may be found.
+     *
+     * Too high starves the run — at 0.8 the remaining 20 % of a 15-minute window is
+     * 3 minutes, shorter than `sustainedForMs`, and the rule cannot fire. Too low makes
+     * the baseline itself noisy, and since a noisy baseline can be low as easily as high,
+     * that direction produces false positives rather than misses.
+     *
+     * Known and accepted bias: if HR has been climbing across the *whole* window, the
+     * baseline segment contains part of the climb, so the measured rise understates the
+     * true one. That errs toward silence on the slowest drifts, which is the safe
+     * direction for an advisory that must not cry wolf.
+     */
+    baselineFraction: 0.4,
+    /** DERIVED: 3 — the same floor `window.minSamples` uses for "not guessing". Below
+     *  this the baseline mean is one or two points and a single artifact moves it. */
+    minBaselineSamples: 3,
+    /**
+     * DERIVED: 10 bpm above baseline. Sports-medicine practice treats a resting HR
+     * elevation of roughly 5–10 bpm as a marker of dehydration or incomplete recovery;
+     * this takes the top of that range because consumer optical HR carries about 7 bpm of
+     * resting error, and a threshold inside the noise floor is not a threshold.
+     */
+    riseBpm: 10,
+    /** DERIVED: 4 bpm — a 6 bpm deadband, sized like `tachycardiaReleaseAbove` for the
+     *  same reason: a real 10 bpm drift emits readings straddling the arm threshold. */
+    riseReleaseBpm: 4,
+    /**
+     * DERIVED: 5 minutes, matching `heartRate.sustainedForMs`. Long enough that a flight
+     * of stairs inside an otherwise still window cannot produce it, short enough to be
+     * observable several times over inside `windowMs`.
+     */
+    sustainedForMs: 5 * MINUTE,
+    /** DERIVED: 3 readings above the arm threshold. At PRD §7.2.1's 30–60 s cadence a
+     *  5-minute span holds 6–11 readings, so this is reachable with margin. */
+    minSustainedSamples: 3,
+    /** DERIVED: 20 bpm — twice the arm threshold, and roughly the elevation associated
+     *  with fluid loss past about 3 % of body mass. */
+    severeRiseBpm: 20,
+  },
+
+  fatigue: {
+    /**
+     * DERIVED: 18 minutes = `inactiveForMs` + 3 minutes.
+     *
+     * The enforced floor is `inactiveForMs + maxGapMs` = 17 minutes, and the extra minute
+     * is not decoration. At a 60 s cadence with a 60 s freshness lag, a 17-minute
+     * half-open window admits readings at `now − 60 s − k × 60 s` for k ≤ 15, a span of
+     * exactly 15 minutes — the condition is satisfiable only by equality, and any extra
+     * lag makes it unsatisfiable. Eighteen minutes buys a full sample of slack. This is
+     * the fourth appearance of that trap in this file; `fatigue.test.ts` asserts the
+     * reachability directly at each cadence rather than trusting the arithmetic here.
+     */
+    windowMs: 18 * MINUTE,
+    /**
+     * DERIVED: 15 minutes of unbroken stillness. Longer than `stillness.heatCriticalMs`
+     * (10 min) on purpose: that one is a PRD-specified emergency precursor paired with
+     * extreme heat, whereas this is an advisory paired only with heart rate, so it needs
+     * to be past the length of an ordinary sit-down to mean anything.
+     *
+     * Too low turns every desk hour amber. Too high pushes the window past the buffer the
+     * app actually keeps — `mock-sensor-window.test.ts` asserts the buffer clears
+     * `longestLookbackMs`, which this value sets.
+     */
+    inactiveForMs: 15 * MINUTE,
+    /**
+     * DERIVED: 90 bpm. Above the 60–80 bpm resting range for adults and above the
+     * ~85 bpm upper bound of "normal resting" in most references, but far below
+     * PRD §7.2.2's 120 bpm flag — a number that is only meaningful *because* it is
+     * conjoined with fifteen minutes of not moving.
+     *
+     * Too low: normal resting variation, and every user sitting quietly is fatigued. Too
+     * high: it collides with the tachycardia flag and stops being a distinct signal.
+     */
+    restingHrAbove: 90,
+    /** DERIVED: 82 bpm — an 8 bpm deadband, one sensor-error width, same as the
+     *  cardiovascular rule's. */
+    restingHrReleaseAbove: 82,
+    /**
+     * DERIVED: 12 minutes. Shorter than `inactiveForMs` so the stillness requirement is
+     * the binding constraint: a heart rate that rose partway through a long still stretch
+     * still qualifies, which is the shape genuine fatigue actually has.
+     */
+    sustainedForMs: 12 * MINUTE,
+    /**
+     * DERIVED: 5 readings. Must stay under `sustainedForMs / maxGapMs + 1` = 7 or the
+     * count becomes unsatisfiable at the widest gap the engine tolerates — the same
+     * cadence-versus-count trap as the duration thresholds, asserted in `fatigue.test.ts`.
+     */
+    minSustainedSamples: 5,
+  },
+
   window: {
     /**
      * DERIVED: 10 minutes. Must exceed `heartRate.sustainedForMs` (see the type doc —
@@ -337,9 +448,74 @@ export function resolveRiskThresholds(overrides?: PartialRiskThresholds): RiskTh
         ? fall
         : { ...fall, stillnessWindowMs: minimumStillnessWindowMs },
     stillness: mergeGroup(base.stillness, overrides.stillness),
+    dehydration: repairDehydration(mergeGroup(base.dehydration, overrides.dehydration), window),
+    fatigue: repairFatigue(mergeGroup(base.fatigue, overrides.fatigue), window),
     window:
       window.ms >= minimumWindowMs ? window : { ...window, ms: minimumWindowMs },
     env: mergeGroup(base.env, overrides.env),
     plausible: mergeGroup(base.plausible, overrides.plausible),
+  };
+}
+
+/**
+ * Widest usable baseline share. Above this the newest slice of the window is too small to
+ * hold a sustained run at any cadence; at 1.0 the reachability check below divides by zero.
+ */
+const MAX_BASELINE_FRACTION = 0.8;
+/** Narrowest useful baseline share — below it the baseline mean is a single artifact away
+ *  from moving the whole comparison. */
+const MIN_BASELINE_FRACTION = 0.1;
+
+/**
+ * Fourth and fifth instances of the unsatisfiable-threshold trap, in the dehydration rule.
+ *
+ * Two of them here are the same shape as `tachycardiaReleaseAbove` — a release threshold
+ * above its arm threshold, or a "severe" threshold below the mild one, both of which make a
+ * tier unreachable or universal without any error. The third is the window: the baseline
+ * consumes the oldest `baselineFraction` of it, so the run has only the remainder to live
+ * in, and if that remainder is shorter than `sustainedForMs` the rule cannot fire at any
+ * cadence. Widening the window is the repair that fails toward the rule still working.
+ */
+function repairDehydration(
+  group: RiskThresholds['dehydration'],
+  window: RiskThresholds['window'],
+): RiskThresholds['dehydration'] {
+  const baselineFraction = Math.min(
+    Math.max(group.baselineFraction, MIN_BASELINE_FRACTION),
+    MAX_BASELINE_FRACTION,
+  );
+  const riseReleaseBpm = Math.min(group.riseReleaseBpm, group.riseBpm);
+  const severeRiseBpm = Math.max(group.severeRiseBpm, group.riseBpm);
+
+  // The run lives in the newest `1 − baselineFraction` of the window, and needs
+  // `sustainedForMs` of span plus one `maxGapMs` of headroom for the half-open boundary and
+  // the newest reading's freshness lag. `ceil` so integer milliseconds never round the
+  // window back under its own floor.
+  const minimumWindowMs = Math.ceil(
+    (group.sustainedForMs + window.maxGapMs) / (1 - baselineFraction),
+  );
+
+  return {
+    ...group,
+    baselineFraction,
+    riseReleaseBpm,
+    severeRiseBpm,
+    windowMs: Math.max(group.windowMs, minimumWindowMs),
+  };
+}
+
+/** Same two traps once more: a release threshold above its arm threshold, and a window too
+ *  narrow to contain the span it demands. */
+function repairFatigue(
+  group: RiskThresholds['fatigue'],
+  window: RiskThresholds['window'],
+): RiskThresholds['fatigue'] {
+  const minimumWindowMs =
+    Math.max(group.inactiveForMs, group.sustainedForMs) + window.maxGapMs;
+
+  return {
+    ...group,
+    restingHrReleaseAbove: Math.min(group.restingHrReleaseAbove, group.restingHrAbove),
+    windowMs: Math.max(group.windowMs, minimumWindowMs),
   };
 }

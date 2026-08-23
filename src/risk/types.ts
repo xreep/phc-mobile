@@ -158,7 +158,13 @@ export type RuleId =
   /** HR > 120 observed, but the sustained-at-rest condition is not confirmed. */
   | 'cardiovascular.hr.tachycardia.unconfirmed'
   /** Impact spike seen, but the following stillness is not confirmed. */
-  | 'fall.impact.unconfirmed';
+  | 'fall.impact.unconfirmed'
+  /** Heat exposure with heart rate drifting above the window's own baseline. */
+  | 'dehydration.cardiovascularDrift'
+  /** The same drift, at a magnitude that reads as more than mild fluid loss. */
+  | 'dehydration.cardiovascularDrift.severe'
+  /** Prolonged stillness with an elevated resting heart rate. */
+  | 'fatigue.inactiveElevatedHr';
 
 /** The exact set of PRD §7.2.2 Tier-1 flags. Anything outside this set is advisory
  *  and must never be presented as one of the four specified flags. */
@@ -279,8 +285,12 @@ export type RiskAssessmentInput = {
   /**
    * Rolling window, oldest → newest. Readings older than the configured window
    * relative to `now` are ignored, so a longer buffer may be passed. The buffer must
-   * span at least `max(window.ms, fall.stillnessWindowMs, stillness.heatCriticalMs)`
-   * — 10 minutes by default, because PRD §7.2.5's "no motion for > 10 min" needs it.
+   * span at least `max(window.ms, fall.stillnessWindowMs, stillness.heatCriticalMs +
+   * window.maxGapMs, dehydration.windowMs, fatigue.windowMs)` — 18 minutes by default,
+   * set by the fatigue rule's inactivity lookback. `assess.ts` computes that bound as
+   * `longestLookbackMs`; `mock-sensor-window.test.ts` asserts the demo buffer clears it,
+   * because a buffer shorter than the bound leaves the extended-lookback rules quietly
+   * reading a truncated window rather than erroring.
    * Unsorted input is tolerated: the engine sorts defensively.
    */
   readonly readings: readonly SensorReading[];
@@ -423,6 +433,104 @@ export type RiskThresholds = {
   readonly stillness: {
     /** PRD §7.2.5: "no motion for > 10 min" alongside an extreme heat index. */
     readonly heatCriticalMs: number;
+  };
+  /**
+   * Dehydration advisory (PRD §7.2.4 extension). Heat exposure plus cardiovascular drift.
+   *
+   * Not a PRD §7.2.2 flag and not an SOS trigger — see {@link SPEC_FLAG_RULES}. The
+   * physiology: plasma volume falls with fluid loss, so stroke volume falls, and heart rate
+   * rises to hold cardiac output. Under heat load that shows up as a slow upward drift in
+   * resting HR long before anything crosses PRD §7.2.2's 120 bpm bar, which is why this is
+   * expressed as a rise *relative to the window's own baseline* rather than an absolute
+   * number: an athlete resting at 52 and a patient resting at 88 both drift, and no single
+   * absolute threshold catches both without drowning one of them in false positives.
+   */
+  readonly dehydration: {
+    /**
+     * Heat index (°F) at or above which exposure is considered a contributing load.
+     *
+     * NOAA's Extreme Caution floor. Deliberately *below* PRD §7.2.2's Danger flag: the
+     * whole point of this advisory is to say something in the band where the mandated heat
+     * flag is silent but sweat loss is already real.
+     */
+    readonly exposureMinF: number;
+    /**
+     * Lookback for the drift comparison.
+     *
+     * **Must leave room for both the baseline segment and a full sustained run** —
+     * `windowMs × (1 − baselineFraction) ≥ sustainedForMs + window.maxGapMs`.
+     * `resolveRiskThresholds` widens it if it does not, because otherwise the baseline
+     * eats the window and the rule is unsatisfiable at every cadence, silently.
+     */
+    readonly windowMs: number;
+    /**
+     * Fraction of the window's samples, oldest first, that form the baseline.
+     *
+     * A fraction rather than a duration so the split is cadence-independent: 40 % of the
+     * samples is 40 % of the span whatever the polling interval, whereas a fixed
+     * `baselineMs` would silently contain zero samples at a coarse cadence. Clamped into
+     * [0.1, 0.8] on resolve — at 1.0 the entire window is baseline and nothing can ever
+     * fire, which is a division by zero in the reachability check as well as a bug.
+     */
+    readonly baselineFraction: number;
+    /** Baseline samples required before a comparison is attempted at all. */
+    readonly minBaselineSamples: number;
+    /** Arm: HR strictly this far above the baseline mean. */
+    readonly riseBpm: number;
+    /**
+     * Hold: an armed drift continues while HR stays this far above baseline.
+     *
+     * **Must not exceed `riseBpm`** — clamped down on resolve. Same Schmitt-trigger
+     * rationale as `heartRate.tachycardiaReleaseAbove`, and the same empirical basis:
+     * consumer optical HR carries roughly 7 bpm of resting error, so a true 10 bpm drift
+     * produces readings that straddle the arm threshold.
+     */
+    readonly riseReleaseBpm: number;
+    /** How long the drift must persist. */
+    readonly sustainedForMs: number;
+    /** Readings above the arm threshold required, independent of the span. */
+    readonly minSustainedSamples: number;
+    /**
+     * Drift at or above this reads as more than mild fluid loss.
+     *
+     * **Must be at least `riseBpm`** — clamped up on resolve, since a severe threshold
+     * below the arm threshold would make every drift severe.
+     */
+    readonly severeRiseBpm: number;
+  };
+  /**
+   * Fatigue advisory (PRD §7.2.4 extension). Prolonged inactivity plus an elevated
+   * resting heart rate.
+   *
+   * Not a PRD §7.2.2 flag and not an SOS trigger. Neither half means much alone — sitting
+   * still is normal, and 92 bpm after climbing stairs is normal — but a heart rate that
+   * stays elevated through twenty unbroken minutes of *not moving* is not explained by
+   * exertion. The bar sits well below §7.2.2's 120 bpm on purpose: the conjunction with
+   * stillness is what makes a smaller number meaningful, and it makes this rule a
+   * complement to the tachycardia flag rather than a duplicate of it.
+   */
+  readonly fatigue: {
+    /**
+     * Lookback for both halves of the conjunction.
+     *
+     * **Must exceed `max(inactiveForMs, sustainedForMs)` by at least `window.maxGapMs`** —
+     * `resolveRiskThresholds` widens it if it does not. The window is half-open, so a
+     * window exactly as wide as the required span can only contain spans strictly shorter
+     * than it; the extra gap also absorbs the newest reading's freshness lag, which at a
+     * 60 s cadence is what decides whether the condition is reachable at all.
+     */
+    readonly windowMs: number;
+    /** Trailing stillness required, measured with the fall rule's rest band and peak
+     *  ceiling so "still" means one thing across the engine. */
+    readonly inactiveForMs: number;
+    /** Arm: resting HR strictly above this while inactive. */
+    readonly restingHrAbove: number;
+    /** Hold: **must not exceed `restingHrAbove`**, clamped down on resolve. */
+    readonly restingHrReleaseAbove: number;
+    /** How long the elevation must persist. */
+    readonly sustainedForMs: number;
+    /** Readings above the arm threshold required, independent of the span. */
+    readonly minSustainedSamples: number;
   };
   readonly window: {
     /**

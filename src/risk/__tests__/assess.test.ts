@@ -89,17 +89,24 @@ describe('normal, safe readings produce no flags', () => {
   });
 
   it('keeps the shape the Dashboard already renders', () => {
+    // The four PRD §7.2.2 flag categories first, in their original order, then the §7.2.4
+    // advisory categories. The order is asserted rather than the set, because a change that
+    // pushed a mandated flag card below an advisory one would be a regression the user sees.
     expect(result.categories.map((c) => c.key)).toEqual([
       'heat',
       'respiratory',
       'cardiovascular',
       'fall',
+      'dehydration',
+      'fatigue',
     ]);
     expect(result.categories.map((c) => c.label)).toEqual([
       'Heat Stress',
       'Respiratory',
       'Cardiovascular',
       'Fall Detection',
+      'Dehydration',
+      'Fatigue',
     ]);
     // `metric` is optional on `RiskCategory` but required here, so the card's third
     // line can never render as undefined.
@@ -623,8 +630,19 @@ describe('combined and critical cases', () => {
     ]);
     expect(result.sosCandidate).toBe(true);
     expect(result.level).toBe('red');
-    for (const category of result.categories) {
-      expect(category.flagged).toBe(true);
+    for (const key of ['heat', 'respiratory', 'cardiovascular', 'fall'] as const) {
+      expect(result.byCategory[key].flagged).toBe(true);
+    }
+
+    // The PRD §7.2.4 advisory categories stay unflagged in the worst scenario the engine can
+    // be handed. This is the containment those two rules rest on: `flagged` means "one of the
+    // six §7.2.2 flags", `flaggedRules` above is exactly those six, and an advisory that could
+    // set either would make both claims false everywhere downstream — including in the SOS
+    // module, which reads `criticalRules`.
+    for (const key of ['dehydration', 'fatigue'] as const) {
+      expect(result.byCategory[key].flagged).toBe(false);
+      expect(result.byCategory[key].critical).toBe(false);
+      expect(result.byCategory[key].criticalRules).toEqual([]);
     }
   });
 

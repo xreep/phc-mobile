@@ -23,7 +23,9 @@ import type {
 import { SPEC_FLAG_RULES } from './types';
 import { sortByTimestamp, withinWindow } from './window';
 import { assessCardiovascular } from './rules/cardiovascular';
+import { assessDehydration } from './rules/dehydration';
 import { assessFall } from './rules/fall';
+import { assessFatigue } from './rules/fatigue';
 import { assessHeat, resolveHeatIndex } from './rules/heat';
 import { assessRespiratory } from './rules/respiratory';
 import { CATEGORY_LABELS, type RuleContext, type RuleOutcome } from './rules/shared';
@@ -31,12 +33,19 @@ import { CATEGORY_LABELS, type RuleContext, type RuleOutcome } from './rules/sha
 /** Severity order for merging. Not exported — nothing outside should rank levels. */
 const LEVEL_RANK: Readonly<Record<RiskLevel, number>> = { green: 0, amber: 1, red: 2 };
 
-/** Dashboard order, matching `RISK_CATEGORIES` so this is a drop-in replacement. */
+/**
+ * Dashboard order. The four PRD §7.2.2 flag categories come first, in the order
+ * `RISK_CATEGORIES` used, so the original cards are where they were; the §7.2.4 advisory
+ * categories follow. Ordering by authority rather than by severity is deliberate — a card
+ * that can never flag must not be able to push a mandated flag down the screen.
+ */
 const CATEGORY_ORDER: readonly RiskCategoryKey[] = [
   'heat',
   'respiratory',
   'cardiovascular',
   'fall',
+  'dehydration',
+  'fatigue',
 ];
 
 const SPEC_FLAG_SET = new Set<RuleId>(SPEC_FLAG_RULES);
@@ -86,18 +95,24 @@ export function assessRisk(input: RiskAssessmentInput): RiskAssessment {
   const sorted = sortByTimestamp(input.readings ?? []);
   const now = resolveNow(input, sorted);
 
-  // One clamp per lookback. The long one exists solely for PRD §7.2.5's ten-minute
-  // stillness; handing it to the vitals rules would let a nine-minute-old heart rate
-  // count as current.
+  // One clamp per lookback. The long one exists for the rules that reason over more than
+  // the vitals window — PRD §7.2.5's ten-minute stillness, and the §7.2.4 advisories'
+  // baseline and inactivity spans. Handing it to the vitals rules would let a
+  // nine-minute-old heart rate count as current.
   //
   // `heatCriticalMs` gets a `maxGapMs` of headroom for the same reason the tachycardia
   // window does: the lookback is half-open, so a window exactly `heatCriticalMs` wide
   // can only ever hold a span strictly less than it, and the rule's `> heatCriticalMs`
-  // test would be unsatisfiable — silently, with no error anywhere.
+  // test would be unsatisfiable — silently, with no error anywhere. The advisory windows
+  // carry that headroom inside themselves (`resolveRiskThresholds` enforces it), so they
+  // enter this max as-is; each rule then slices its own window out of `extendedReadings`
+  // rather than reading the whole buffer.
   const longestLookbackMs = Math.max(
     thresholds.window.ms,
     thresholds.stillness.heatCriticalMs + thresholds.window.maxGapMs,
     thresholds.fall.stillnessWindowMs,
+    thresholds.dehydration.windowMs,
+    thresholds.fatigue.windowMs,
   );
   const extendedReadings = withinWindow(sorted, now, longestLookbackMs);
   const readings = withinWindow(sorted, now, thresholds.window.ms);
@@ -121,6 +136,8 @@ export function assessRisk(input: RiskAssessmentInput): RiskAssessment {
     respiratory: assessRespiratory(context),
     cardiovascular: assessCardiovascular(context),
     fall: assessFall(context),
+    dehydration: assessDehydration(context),
+    fatigue: assessFatigue(context),
   };
 
   const categories = CATEGORY_ORDER.map((key) => toCategory(key, outcomes[key]));

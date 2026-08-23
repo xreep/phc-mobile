@@ -89,7 +89,18 @@ describe('Home dashboard', () => {
   it('renders one card per rule-engine category', async () => {
     const { getByText } = await renderHome();
 
-    for (const label of ['Heat Stress', 'Respiratory', 'Cardiovascular', 'Fall Detection']) {
+    // The screen maps over `assessment.categories`, so the last two arrive automatically —
+    // which is exactly why they are named here. `Dehydration` and `Fatigue` are the PRD
+    // §7.2.4 advisory extensions; without this list a category could be dropped from
+    // `CATEGORY_ORDER` and the UI would silently render five cards.
+    for (const label of [
+      'Heat Stress',
+      'Respiratory',
+      'Cardiovascular',
+      'Fall Detection',
+      'Dehydration',
+      'Fatigue',
+    ]) {
       expect(getByText(label)).toBeTruthy();
     }
   });
@@ -108,7 +119,10 @@ describe('Home dashboard', () => {
     const { getByText, getAllByText } = await renderHome();
 
     expect(getByText('Alert')).toBeTruthy(); // heat → red
-    expect(getAllByText('Normal')).toHaveLength(3); // the other three → green
+    // The other five → green. Two of those are the §7.2.4 advisories, which stay green in
+    // extreme heat because each is a conjunction: the heart rate has neither drifted off the
+    // window's baseline nor stayed elevated through a long still stretch.
+    expect(getAllByText('Normal')).toHaveLength(5);
   });
 
   it('shows the newest reading’s vitals', async () => {
@@ -158,7 +172,7 @@ describe('the heat card follows the fetched observation', () => {
     const { getByText, getAllByText, queryByText } = await renderHome();
 
     expect(getByText('Heat conditions are comfortable.')).toBeTruthy();
-    expect(getAllByText('Normal')).toHaveLength(4);
+    expect(getAllByText('Normal')).toHaveLength(6);
     expect(queryByText('Alert')).toBeNull();
     expect(
       queryByText('Extreme heat danger — get indoors or into shade and cool down now.'),

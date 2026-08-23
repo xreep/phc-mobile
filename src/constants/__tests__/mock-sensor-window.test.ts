@@ -71,13 +71,18 @@ describe('mock sensor window', () => {
   });
 
   it('reaches back past the engine’s longest lookback', () => {
-    // `assess.ts` clamps to max(window.ms, heatCriticalMs + maxGapMs, fall.stillnessWindowMs).
-    // A window shorter than that leaves the extended-lookback rules quietly reading a
-    // truncated buffer rather than erroring.
+    // `assess.ts` clamps to the widest span any rule needs. A window shorter than that
+    // leaves the extended-lookback rules quietly reading a truncated buffer rather than
+    // erroring — which is why this is asserted here and not left to arithmetic in a comment.
+    // The bound is currently set by `fatigue.windowMs`, not by the heat escalation, so a
+    // reviewer widening either advisory window will be told by this test that the demo
+    // buffer has to grow with it.
     const longestLookbackMs = Math.max(
       T.window.ms,
       T.stillness.heatCriticalMs + T.window.maxGapMs,
       T.fall.stillnessWindowMs,
+      T.dehydration.windowMs,
+      T.fatigue.windowMs,
     );
     expect(NOW - readings[0].timestamp).toBeGreaterThan(longestLookbackMs);
   });
@@ -196,12 +201,14 @@ describe('the assessment the Dashboard renders', () => {
     expect(assessment.heatIndexOutOfDomain).toBe(false);
   });
 
-  it('produces the four cards in dashboard order', () => {
+  it('produces the six cards in dashboard order', () => {
     expect(assessment.categories.map((c) => c.key)).toEqual([
       'heat',
       'respiratory',
       'cardiovascular',
       'fall',
+      'dehydration',
+      'fatigue',
     ]);
 
     expect(
@@ -246,6 +253,27 @@ describe('the assessment the Dashboard renders', () => {
         metric: 'Active',
         guidance: 'No fall or unusual stillness detected.',
       },
+      {
+        // Extreme heat *without* cardiovascular drift. This is the pair that shows the
+        // dehydration rule is a conjunction and not a second heat card: the heat index here
+        // is 56 °C, far past the exposure threshold, and the card is still green because the
+        // heart rate has not moved off its own baseline. The escalation block below asserts
+        // the reachable positive.
+        key: 'dehydration',
+        level: 'green',
+        flagged: false,
+        rule: null,
+        metric: 'HR +0 bpm vs baseline 78',
+        guidance: 'Heat exposure is high but your heart rate is steady — keep drinking water.',
+      },
+      {
+        key: 'fatigue',
+        level: 'green',
+        flagged: false,
+        rule: null,
+        metric: 'HR 78 bpm, active',
+        guidance: 'No signs of fatigue.',
+      },
     ]);
   });
 
@@ -254,6 +282,8 @@ describe('the assessment the Dashboard renders', () => {
     expect(assessment.byCategory.respiratory.score).toBe(0);
     expect(assessment.byCategory.cardiovascular.score).toBe(0);
     expect(assessment.byCategory.fall.score).toBe(0);
+    expect(assessment.byCategory.dehydration.score).toBe(0);
+    expect(assessment.byCategory.fatigue.score).toBe(0);
   });
 });
 
@@ -288,5 +318,79 @@ describe('the escalation this fixture is built to avoid', () => {
     // control above from being mistaken for fall detection.
     expect(collapsed.byCategory.fall.flagged).toBe(false);
     expect(collapsed.criticalRules).not.toContain('fall.impactThenStillness');
+  });
+
+  it('satisfies fatigue’s stillness half without firing it, because the pulse is settled', () => {
+    // Half of a conjunction, asserted directly: fifteen minutes of stillness are present
+    // here, so the green fatigue card on the demo screen is held green by the heart rate
+    // alone. Without this the card could be green because the rule is dead.
+    expect(collapsed.byCategory.fatigue.metric).toMatch(/still \d+ min$/);
+    expect(collapsed.byCategory.fatigue.rule).toBeNull();
+    expect(collapsed.byCategory.fatigue.level).toBe('green');
+  });
+});
+
+describe('the advisory cards on the demo screen are reachable negatives', () => {
+  /** The shipped window, motion removed, with `hr` transformed by `raise`. */
+  function variant(raise: (hr: number, timestamp: number) => number): SensorReading[] {
+    return buildMockReadings(NOW).map((reading) => ({
+      ...reading,
+      motionSummary: MOCK_WINDOW.still,
+      hr: raise(reading.hr as number, reading.timestamp),
+    }));
+  }
+
+  /**
+   * Someone who stopped moving in extreme heat and whose pulse then climbed 20 bpm — the
+   * elevation confined to the newest part of the window, which is what makes it a *drift*
+   * away from the window's own baseline rather than a level.
+   */
+  const drifting = assessRisk({
+    readings: variant((hr, timestamp) => (timestamp > NOW - 9 * 60_000 ? hr + 20 : hr)),
+    environment,
+    now: NOW,
+  });
+
+  /**
+   * The same 20 bpm, raised across the *whole* window instead. Nothing drifts — the baseline
+   * moves with it — but the pulse is now elevated through fifteen unbroken minutes of
+   * stillness, which is the fatigue shape.
+   */
+  const sustained = assessRisk({
+    readings: variant((hr) => hr + 20),
+    environment,
+    now: NOW,
+  });
+
+  it('fires dehydration on heat plus drift, and only as an advisory', () => {
+    expect(drifting.byCategory.dehydration.firedRules).toContain(
+      'dehydration.cardiovascularDrift',
+    );
+    expect(drifting.byCategory.dehydration.level).not.toBe('green');
+
+    // The containment, asserted where it would actually be felt: this fixture *is* an SOS
+    // candidate — `heat.stillness.critical` fires on the same window — so if dehydration
+    // could contribute a critical rule it would be adding a second reason to text every
+    // emergency contact. It cannot.
+    expect(drifting.sosCandidate).toBe(true);
+    expect(drifting.byCategory.dehydration.flagged).toBe(false);
+    expect(drifting.byCategory.dehydration.criticalRules).toEqual([]);
+    expect(drifting.flaggedRules).not.toContain('dehydration.cardiovascularDrift');
+    expect(drifting.criticalRules).not.toContain('dehydration.cardiovascularDrift');
+  });
+
+  it('fires fatigue on stillness plus an elevated pulse, capped at amber', () => {
+    expect(sustained.byCategory.fatigue.firedRules).toEqual(['fatigue.inactiveElevatedHr']);
+    expect(sustained.byCategory.fatigue.level).toBe('amber');
+    expect(sustained.byCategory.fatigue.flagged).toBe(false);
+    expect(sustained.byCategory.fatigue.criticalRules).toEqual([]);
+  });
+
+  it('separates the two shapes rather than reporting both on either', () => {
+    // The pair is the point. A single elevated-heart-rate fixture that lit both cards would
+    // mean the two rules are measuring the same thing under different names, and either one
+    // could then be deleted without a test noticing.
+    expect(drifting.byCategory.fatigue.rule).toBeNull();
+    expect(sustained.byCategory.dehydration.rule).toBeNull();
   });
 });

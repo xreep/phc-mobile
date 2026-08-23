@@ -25,7 +25,16 @@ export type RiskLevel = 'green' | 'amber' | 'red';
  * coupling to the app — see the header of `src/risk/types.ts`.
  */
 export type RiskCategory = {
-  key: 'heat' | 'respiratory' | 'cardiovascular' | 'fall';
+  /**
+   * `heat` | `respiratory` | `cardiovascular` | `fall` are the four PRD §7.2.2 flag
+   * categories. `dehydration` and `fatigue` are Tier-1 *advisory* categories: they are
+   * computed by the same engine from the same window, but they are not among the six
+   * §7.2.2 flags, so they never set `flagged` and never contribute to an SOS. Widening
+   * this union is deliberately a breaking change — `CATEGORY_LABELS`, `CATEGORY_ORDER`
+   * and the `outcomes` record in `assess.ts` are all keyed by it, so a new category
+   * cannot be added without the compiler naming every place that has to handle it.
+   */
+  key: 'heat' | 'respiratory' | 'cardiovascular' | 'fall' | 'dehydration' | 'fatigue';
   label: string;
   level: RiskLevel;
   /** One-line, plain-language guidance shown under the status. */

@@ -1,5 +1,5 @@
 /**
- * Shared contract for the four Tier-1 rules (PRD §7.2.2).
+ * Shared contract for the Tier-1 rules (PRD §7.2.2, plus the §7.2.4 advisory extensions).
  *
  * Each rule is a pure `(RuleContext) => RuleOutcome`. Keeping them uniform is what
  * lets `assess.ts` stay a thin fold: it builds the context once, runs the rules, and
@@ -23,6 +23,8 @@ export const CATEGORY_LABELS: Readonly<Record<RiskCategoryKey, string>> = {
   respiratory: 'Respiratory',
   cardiovascular: 'Cardiovascular',
   fall: 'Fall Detection',
+  dehydration: 'Dehydration',
+  fatigue: 'Fatigue',
 };
 
 /**
