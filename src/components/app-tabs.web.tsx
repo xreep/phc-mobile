@@ -28,6 +28,9 @@ export default function AppTabs() {
           <TabTrigger name="environment" href="/environment" asChild>
             <TabButton>Environment</TabButton>
           </TabTrigger>
+          <TabTrigger name="community" href="/community" asChild>
+            <TabButton>Community</TabButton>
+          </TabTrigger>
           <TabTrigger name="settings" href="/settings" asChild>
             <TabButton>Settings</TabButton>
           </TabTrigger>

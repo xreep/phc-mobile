@@ -218,3 +218,19 @@ export function setSharingPref(
 export function isSosEnabled(settings: PersistedSettings): boolean {
   return settings.sharing.sos === true;
 }
+
+/**
+ * Whether the Community View may show any figures (PRD §4, ASHA persona).
+ *
+ * Named for the same reason as {@link isSosEnabled} — the screen asks a question about intent,
+ * not about which string happens to key the pref.
+ *
+ * Off by default, and `anon_aggregate` is deliberately reused rather than joined by a second
+ * key: the pref already reads "share coarse, de-identified risk trends with local responders",
+ * which is precisely what this screen demonstrates. A separate toggle would let a user consent
+ * to community aggregation in one place and decline it in another, and there would be no
+ * defensible answer as to which one won.
+ */
+export function isCommunityInsightsEnabled(settings: PersistedSettings): boolean {
+  return settings.sharing.anon_aggregate === true;
+}
