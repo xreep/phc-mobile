@@ -12,12 +12,17 @@
  * the UI, via `useRiskColors()`.
  */
 
-import type { RiskCategory, RiskLevel, SensorSourceOption } from '@/constants/health-data';
+import type {
+  RiskCategory,
+  RiskLevel,
+  RiskTier,
+  SensorSourceOption,
+} from '@/constants/health-data';
 
 /** Re-exported so engine modules have a single type source and never reach into
  *  `@/constants/health-data` themselves — which keeps the app-coupling surface to the
  *  one import above, where it is documented. */
-export type { RiskCategory, RiskLevel };
+export type { RiskCategory, RiskLevel, RiskTier };
 
 /**
  * The four rule-engine categories (PRD §7.2.2). Derived from the UI's own type so
@@ -227,6 +232,16 @@ export type CategoryAssessment = RiskCategory & {
   /** Narrowed to required (it is optional on `RiskCategory`) so the card's third
    *  line never vanishes. With `dataQuality: 'missing'` it says so honestly. */
   readonly metric: string;
+  /**
+   * Narrowed to required for the same reason: the engine always knows which rung of the
+   * category's ladder `guidance` came from, and `null` — nothing elevated — is one of the
+   * answers rather than the absence of one. Derived from `score` through
+   * `rules/recommend.ts`, never assigned beside it, so a `severe` tier cannot appear on an
+   * amber card.
+   */
+  readonly tier: RiskTier | null;
+  /** Steps for that rung, most urgent first. Empty exactly when `tier` is `null`. */
+  readonly actions: readonly string[];
   /** `true` iff a PRD §7.2.2 Tier-1 flag fired. This is the spec-faithful output;
    *  `level` is presentation on top of it. */
   readonly flagged: boolean;

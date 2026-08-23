@@ -13,10 +13,20 @@ const LEVEL_LABEL: Record<RiskLevel, string> = {
   red: 'Alert',
 };
 
-/** Traffic-light risk indicator with one-line guidance (PRD §7.2.4 Home). */
+/**
+ * Traffic-light risk indicator with tiered guidance (PRD §7.2.4 Home).
+ *
+ * The tier word itself is deliberately not shown. `category.tier` is how the engine chose the
+ * headline and the steps; putting "moderate" on the card would ask the reader to reconcile two
+ * severity vocabularies at once — mild/moderate/severe against Normal/Caution/Alert — for no
+ * information they cannot already read off the sentence.
+ */
 export function RiskCard({ category }: { category: RiskCategory }) {
   const risk = useRiskColors();
   const c = risk[category.level];
+  // Empty exactly when no rung was selected, which is the steady-state card. Optional on
+  // `RiskCategory` so hand-built fixtures need not invent one.
+  const actions = category.actions ?? [];
 
   return (
     <Card style={styles.card}>
@@ -33,6 +43,21 @@ export function RiskCard({ category }: { category: RiskCategory }) {
       <ThemedText type="small" themeColor="textSecondary">
         {category.guidance}
       </ThemedText>
+
+      {actions.length > 0 ? (
+        <View style={styles.actions}>
+          {actions.map((action) => (
+            <View key={action} style={styles.action}>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.bullet}>
+                {'•'}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.actionText}>
+                {action}
+              </ThemedText>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
       {category.metric ? (
         <ThemedText type="code" themeColor="textSecondary">
@@ -52,6 +77,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  actions: {
+    gap: Spacing.one,
+  },
+  action: {
+    flexDirection: 'row',
+    gap: Spacing.one,
+  },
+  bullet: {
+    // Fixed width so wrapped step text stays aligned under its own first line rather than
+    // running back under the bullet.
+    width: Spacing.two,
+  },
+  actionText: {
+    flex: 1,
   },
   pill: {
     flexDirection: 'row',

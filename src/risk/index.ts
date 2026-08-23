@@ -2,7 +2,7 @@
  * Tier-1 rule-based risk engine (PRD §7.2.2) — public surface.
  *
  * Framework-agnostic and side-effect free: no React, no react-native, no Expo, no
- * clock, no I/O, no module state. It imports exactly three *types* from
+ * clock, no I/O, no module state. It imports exactly four *types* from
  * `@/constants/health-data` and nothing else from the app, which is what lets it be
  * unit-tested in isolation and dropped into both the sensor pipeline and the Dashboard.
  *
@@ -93,6 +93,7 @@ export type {
   RiskCategoryKey,
   RiskLevel,
   RiskThresholds,
+  RiskTier,
   RuleId,
   SensorReading,
   SensorSource,

@@ -63,6 +63,11 @@ function toCategory(key: RiskCategoryKey, outcome: RuleOutcome): CategoryAssessm
     label: CATEGORY_LABELS[key],
     level: outcome.level,
     guidance: outcome.guidance,
+    // Copied together, never recomputed. `tier` is which rung `guidance` came from and
+    // `actions` are that rung's steps, so re-deriving either here would let the card show
+    // steps from one severity under a sentence from another.
+    tier: outcome.tier,
+    actions: outcome.actions,
     metric: outcome.metric,
     flagged: outcome.flagged,
     rule: outcome.rule,

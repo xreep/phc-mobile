@@ -49,6 +49,7 @@ import {
   restFraction,
   trailingRun,
 } from '../window';
+import { recommend, tieredGuidance, type RecommendationLadder } from './recommend';
 import {
   CATEGORY_LABELS,
   clampScore,
@@ -63,6 +64,58 @@ export const DEHYDRATION_LABEL = CATEGORY_LABELS.dehydration;
 
 /** Ceiling of the drift ramp — at or above this the score is pinned at the band's top. */
 const SCORE_CEILING_RISE_BPM = 35;
+
+/**
+ * Dehydration's recommendation ladder (PRD §7.2.4 ext).
+ *
+ * This category is the reason the tiers are per-ladder rather than three global score cuts. Its
+ * amber is already split at 55 by `scoreFor` below, so that the Danger band reads worse than
+ * Extreme Caution at the same drift — and both halves used to emit one identical sentence. The
+ * distinction was computed, stored in the score, and then thrown away before it reached the
+ * person the advisory is for. The middle rung is that distinction, finally said out loud.
+ *
+ * `ceiling: 85` is not decoration either: it is the advisory containment from the file header,
+ * restated where it can be checked. This rule cannot reach 90, so a `severe` rung whose span ran
+ * to 100 would be claiming a range it can never occupy, and `ladderProblems` would still pass it
+ * — but the reachability half of `recommend.test.ts` would not.
+ */
+export const DEHYDRATION_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: 85,
+  rungs: [
+    {
+      minScore: 40,
+      tier: 'mild',
+      headline:
+        'Heart rate is drifting up in the heat, which often means fluid loss — drink water and rest.',
+      actions: [
+        'Drink a glass of water now.',
+        'Rest in the shade for ten minutes.',
+      ],
+    },
+    {
+      minScore: 55,
+      tier: 'moderate',
+      headline:
+        'Your heart rate is drifting up in dangerous heat — stop and drink water before carrying on.',
+      actions: [
+        'Stop what you are doing and get into shade.',
+        'Drink water steadily — a few mouthfuls every few minutes.',
+        'Wait until your heart rate settles before carrying on.',
+      ],
+    },
+    {
+      minScore: 70,
+      tier: 'severe',
+      headline:
+        'Strong signs of fluid loss in dangerous heat — stop, get into shade, and drink water now.',
+      actions: [
+        'Stop, sit in shade, and drink water now.',
+        'Add a pinch of salt and a little sugar to the water if you can.',
+        'Get help if you feel dizzy or confused, or stop passing urine.',
+      ],
+    },
+  ],
+};
 
 function metricFor(rise: number, baseline: number): string {
   const signed = rise >= 0 ? `+${Math.round(rise)}` : `${Math.round(rise)}`;
@@ -198,15 +251,17 @@ export function assessDehydration(context: RuleContext): RuleOutcome {
           0,
   );
 
-  const guidance = severe
-    ? 'Strong signs of fluid loss in dangerous heat — stop, get into shade, and drink water now.'
-    : drifting
-      ? 'Heart rate is drifting up in the heat, which often means fluid loss — drink water and rest.'
-      : isStale
-        ? 'Heart-rate reading is out of date, so fluid loss cannot be estimated.'
-        : exposed
-          ? 'Heat exposure is high but your heart rate is steady — keep drinking water.'
-          : 'No signs of heat-related fluid loss.';
+  // `severe` and `drifting` still decide `firedRules`; the score decides what is said. They
+  // agree by construction — `severe` is exactly the condition that pushes the score to 70 — and
+  // the middle rung is reachable only through the score, which is the whole point.
+  const advice = tieredGuidance(
+    recommend(DEHYDRATION_RECOMMENDATIONS, score),
+    isStale
+      ? 'Heart-rate reading is out of date, so fluid loss cannot be estimated.'
+      : exposed
+        ? 'Heat exposure is high but your heart rate is steady — keep drinking water.'
+        : 'No signs of heat-related fluid loss.',
+  );
 
   const metric =
     baseline === null
@@ -223,7 +278,7 @@ export function assessDehydration(context: RuleContext): RuleOutcome {
     criticalRules: [],
     score,
     metric,
-    guidance,
+    ...advice,
     dataQuality,
     envMultiplier,
   };

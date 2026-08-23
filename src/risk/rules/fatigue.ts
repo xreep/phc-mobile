@@ -48,6 +48,7 @@ import {
   trailingRun,
   trailingStillRunMs,
 } from '../window';
+import { recommend, tieredGuidance, type RecommendationLadder } from './recommend';
 import {
   CATEGORY_LABELS,
   clampScore,
@@ -72,6 +73,47 @@ const MAX_FATIGUE_SCORE = 69;
 
 /** Ceiling of the heart-rate ramp — at or above this the score is pinned at the cap. */
 const SCORE_CEILING_HR = 115;
+
+/**
+ * Fatigue's recommendation ladder (PRD §7.2.4 ext).
+ *
+ * Two rungs, both amber, and `ceiling: 69` is {@link MAX_FATIGUE_SCORE} written where a test can
+ * read it. This is the other half of the argument against three global tier cuts: a `severe` rung
+ * at 90 would be permanently unreachable in this category, so the ladder would advertise three
+ * tiers and deliver one. Subdividing the band it *can* occupy gives the user two real answers
+ * instead — the difference between "take a break" and "stop for the day", which at a 25 bpm-wide
+ * ramp is a difference the score can actually resolve.
+ *
+ * The cut at 55 lands near 103 bpm sustained through the stillness window. That is not a round
+ * number and is not meant to be; it is the midpoint of a range whose ends were fixed by the
+ * containment argument in the file header.
+ */
+export const FATIGUE_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: MAX_FATIGUE_SCORE,
+  rungs: [
+    {
+      minScore: 40,
+      tier: 'mild',
+      headline:
+        'Your heart rate has stayed high while you have been resting — take a proper break and drink water.',
+      actions: [
+        'Sit somewhere cool and rest for fifteen minutes.',
+        'Drink water, and eat something if you have not.',
+      ],
+    },
+    {
+      minScore: 55,
+      tier: 'moderate',
+      headline:
+        'Your heart rate has stayed well above resting for a while — stop for the day if you can.',
+      actions: [
+        'Stop working and rest properly, not just sitting down.',
+        'Drink water and get out of the heat.',
+        'Ask someone to check on you if this does not ease off.',
+      ],
+    },
+  ],
+};
 
 function minutes(ms: number): number {
   return Math.floor(ms / 60_000);
@@ -165,13 +207,14 @@ export function assessFatigue(context: RuleContext): RuleOutcome {
     ),
   );
 
-  const guidance = fatigued
-    ? 'Your heart rate has stayed high while you have been resting — take a proper break and drink water.'
-    : isStale
+  const advice = tieredGuidance(
+    recommend(FATIGUE_RECOMMENDATIONS, score),
+    isStale
       ? 'Heart-rate reading is out of date, so fatigue cannot be estimated.'
       : inactive
         ? 'You have been still for a while and your heart rate is settled.'
-        : 'No signs of fatigue.';
+        : 'No signs of fatigue.',
+  );
 
   const metric = inactive
     ? `HR ${Math.round(hr)} bpm, still ${minutes(stillMs)} min`
@@ -187,7 +230,7 @@ export function assessFatigue(context: RuleContext): RuleOutcome {
     criticalRules: [],
     score,
     metric,
-    guidance,
+    ...advice,
     dataQuality,
     envMultiplier,
   };

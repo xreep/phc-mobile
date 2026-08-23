@@ -16,6 +16,12 @@
  * pair. But it is still re-banded locally rather than trusted wholesale: a provider's
  * "feels like" is not necessarily a NOAA heat index, and the flag must key off NOAA's
  * bands to mean what PRD §7.2.2 says it means.
+ *
+ * ## Guidance is chosen by score, not by predicate
+ * See {@link HEAT_RECOMMENDATIONS}. This is the one category where the two were already
+ * equivalent — its score ramps are NOAA's bands — so the four sentences are unchanged and only
+ * the concrete steps are new. It is also the category that shows why an override hatch is
+ * needed at all: suspected collapse scores exactly what plain extreme heat scores.
  */
 
 import {
@@ -32,6 +38,12 @@ import {
 import type { DataQuality, EnvironmentSnapshot, RuleId } from '../types';
 import { trailingStillRunMs } from '../window';
 import {
+  recommend,
+  tieredGuidance,
+  type Recommendation,
+  type RecommendationLadder,
+} from './recommend';
+import {
   clampScore,
   interpolateScore,
   levelForScore,
@@ -42,6 +54,73 @@ import {
 
 /** Top of the score ramp: 140 °F is far beyond the chart, so anything there pins. */
 const SCORE_CEILING_F = 140;
+
+/**
+ * Heat's recommendation ladder (PRD §7.2.4 ext).
+ *
+ * The cuts are not chosen here — they are read off `scoreFor` below, which is itself read off
+ * NOAA's bands: Extreme Caution maps to 40–69, Danger to 70–89, Extreme Danger to 90–100. So
+ * the three tiers *are* the three NOAA bands above Caution, and the ladder is documentation of
+ * a structure the rule already had rather than a new scale invented next to it.
+ *
+ * `ladderProblems` is what keeps that true: move a cut off a band edge and the rung starts
+ * spanning a level boundary, which fails in `recommend.test.ts`.
+ */
+export const HEAT_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: 100,
+  rungs: [
+    {
+      minScore: 40,
+      tier: 'mild',
+      headline: 'Heat index is high — drink water and avoid direct sun 12–3pm.',
+      actions: [
+        'Drink a glass of water now, before you feel thirsty.',
+        'Move any outdoor work to the early morning or evening.',
+      ],
+    },
+    {
+      minScore: 70,
+      tier: 'moderate',
+      headline: 'Dangerous heat — avoid going out, drink water, and stay in the shade.',
+      actions: [
+        'Stop outdoor work and get into shade.',
+        'Drink water every 15 minutes, even without thirst.',
+        'Wet your face, neck, and wrists to cool down.',
+      ],
+    },
+    {
+      minScore: 90,
+      tier: 'severe',
+      headline: 'Extreme heat danger — get indoors or into shade and cool down now.',
+      actions: [
+        'Get indoors or into deep shade immediately.',
+        'Loosen clothing and cool your skin with water.',
+        'Get help if you feel dizzy or confused, or stop sweating.',
+      ],
+    },
+  ],
+};
+
+/**
+ * Suspected heat collapse (PRD §7.2.5).
+ *
+ * Declared at `severe` rather than selected by score, because it cannot be: `collapseSuspected`
+ * requires `extreme`, so its score is already 90–100 and identical to plain extreme heat. The
+ * heat index cannot express the difference between dangerous weather and a person lying still
+ * in it, so the wording is overridden and the tier is not — see the header of `./recommend.ts`.
+ *
+ * The steps are addressed to whoever is *reading the phone*, which in this state may not be the
+ * person the readings came from.
+ */
+export const HEAT_COLLAPSE_RECOMMENDATION: Recommendation = {
+  tier: 'severe',
+  headline: 'Extreme heat and no movement detected — this may be heat collapse.',
+  actions: [
+    'Call emergency services now.',
+    'Move the person into shade and cool them with water.',
+    'Do not leave them alone.',
+  ],
+};
 
 /** Resolved heat index for one tick, in both units, with its provenance. */
 export type HeatIndexResult = {
@@ -187,15 +266,13 @@ export function assessHeat(context: RuleContext): RuleOutcome {
 
   const score = clampScore(scoreFor(heatIndexF));
 
-  const guidance = collapseSuspected
-    ? 'Extreme heat and no movement detected — this may be heat collapse.'
-    : extreme
-      ? 'Extreme heat danger — get indoors or into shade and cool down now.'
-      : flagged
-        ? 'Dangerous heat — avoid going out, drink water, and stay in the shade.'
-        : heatIndexBand.label === 'Extreme Caution'
-          ? 'Heat index is high — drink water and avoid direct sun 12–3pm.'
-          : 'Heat conditions are comfortable.';
+  // Score picks the rung; the collapse case only replaces the wording at the tier that score
+  // already selected. `flagged`, `extreme`, and the band label are still what decide
+  // `firedRules` — they are the spec's predicates and the ladder does not touch them.
+  const advice = tieredGuidance(
+    collapseSuspected ? HEAT_COLLAPSE_RECOMMENDATION : recommend(HEAT_RECOMMENDATIONS, score),
+    'Heat conditions are comfortable.',
+  );
 
   return {
     level: levelForScore(score),
@@ -205,7 +282,7 @@ export function assessHeat(context: RuleContext): RuleOutcome {
     criticalRules: collapseSuspected ? ['heat.stillness.critical'] : [],
     score,
     metric: metricFor(heatIndexC, heatIndexOutOfDomain),
-    guidance,
+    ...advice,
     dataQuality,
     // Heat is the source of environmental amplification, not a recipient of it.
     envMultiplier: 1,

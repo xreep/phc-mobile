@@ -16,6 +16,17 @@
 export type RiskLevel = 'green' | 'amber' | 'red';
 
 /**
+ * Severity rung the guidance was chosen at (PRD §7.2.4 extension).
+ *
+ * Deliberately *not* a second traffic light. `RiskLevel` is the card's colour and comes from
+ * the score's band; the tier is a finer cut *inside* a band, so a category can say something
+ * different at the bottom of amber than at the top of it. The engine guarantees the two agree
+ * — `mild` never appears on a red card, `severe` never on an amber one — which is enforced in
+ * `src/risk/rules/recommend.ts` rather than by convention.
+ */
+export type RiskTier = 'mild' | 'moderate' | 'severe';
+
+/**
  * One dashboard risk card.
  *
  * The Dashboard no longer holds a hardcoded array of these: the Tier-1 rule engine
@@ -37,8 +48,16 @@ export type RiskCategory = {
   key: 'heat' | 'respiratory' | 'cardiovascular' | 'fall' | 'dehydration' | 'fatigue';
   label: string;
   level: RiskLevel;
-  /** One-line, plain-language guidance shown under the status. */
+  /** One-line, plain-language guidance shown under the status. Tier-selected — see `tier`. */
   guidance: string;
+  /**
+   * Which rung of the category's ladder `guidance` came from, or `null` when nothing is
+   * elevated and the line is the steady-state one. Optional so a hand-built category (a
+   * placeholder, a fixture) does not have to invent one.
+   */
+  tier?: RiskTier | null;
+  /** Concrete steps for that rung, most urgent first. Empty when `tier` is `null`. */
+  actions?: readonly string[];
   /** Short current-reading string, e.g. "SpO₂ 97%". */
   metric?: string;
 };
