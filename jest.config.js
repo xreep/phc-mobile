@@ -16,6 +16,11 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
 
+  // `setupFilesAfterEnv`, not `setupFiles`: the preset owns `setupFiles` (React Native's
+  // setup plus Expo's) and a key declared here would replace that array rather than extend
+  // it. `setupFilesAfterEnv` is unset by the preset, so this is purely additive.
+  setupFilesAfterEnv: ['<rootDir>/jest/setup-after-env.js'],
+
   // jest-expo's default testMatch treats EVERY file under a __tests__ directory as a
   // suite, so a shared fixtures/helpers module placed there fails with "must contain
   // at least one test". Requiring an explicit .test/.spec infix lets helpers live

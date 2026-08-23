@@ -31,6 +31,10 @@ yarn-error.*
 *.pem
 
 # local env files
+# `.env*.local` is the Expo default; `.env` is added because this repo is public and a
+# key landing there would be committed. Deliberately not `.env*`, which would also
+# swallow a committed `.env.example`.
+.env
 .env*.local
 
 # typescript
