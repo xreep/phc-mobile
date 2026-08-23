@@ -138,17 +138,16 @@ export const TRENDS: Record<TrendRange, TrendSeries[]> = {
   ],
 };
 
-export type EmergencyContact = {
-  id: string;
-  name: string;
-  relation: string;
-  phone: string;
-};
-
-export const EMERGENCY_CONTACTS: EmergencyContact[] = [
-  { id: 'c1', name: 'Priya Sharma', relation: 'Sister', phone: '+91 98765 43210' },
-  { id: 'c2', name: 'Dr. Anand Rao', relation: 'Physician', phone: '+91 91234 56780' },
-];
+/*
+ * Emergency contacts now live in persisted settings, not here.
+ *
+ * The demo array that used to sit at this spot held two realistic-looking Indian numbers, which
+ * was harmless while SOS was a button with no `onPress` and became dangerous the moment it had
+ * one: `+91 98765 43210` normalizes to a structurally valid E.164 number, so no validation
+ * layer would have stopped a demo tap from texting a stranger. The list is empty by default —
+ * see `src/settings/store.ts` — and `EmergencyContact` is declared in `src/sos/types.ts`, next
+ * to the E.164 guarantee the send path depends on. Import it from `@/sos`.
+ */
 
 export type SensorSourceOption = {
   key: 'health_connect' | 'ble_esp32' | 'simulated';

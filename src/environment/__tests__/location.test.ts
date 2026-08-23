@@ -7,10 +7,13 @@
  *    `ResolvedLocation`, because an unhandled rejection here would take out the whole
  *    environment feed — including the cached reading that is the offline story — over a
  *    denied permission, which is an ordinary user choice rather than an error.
- * 2. **It must never ask for precise location.** That is a privacy promise made in three
- *    places (`app.json`'s blocked Android permission, the iOS reduced-accuracy flag, and
- *    the accuracy argument here) and the coordinates leave the device, so the accuracy
- *    argument and the 2-decimal rounding are both asserted rather than assumed.
+ * 2. **It must never ask for precise location.** This used to be belt-and-braces: `app.json`
+ *    blocked Android's `ACCESS_FINE_LOCATION` outright and set the iOS reduced-accuracy flag,
+ *    so a coding mistake here could not have leaked a precise fix. SOS needs a precise fix to
+ *    be worth sending, so both of those platform-level guarantees are gone, and the coarse
+ *    promise for the environment feed now rests **entirely** on this module's `Accuracy.Low`
+ *    argument and its 2-decimal rounding. These coordinates leave the device, so both are
+ *    asserted rather than assumed — they are now the only thing keeping the promise.
  */
 
 import * as Location from 'expo-location';

@@ -27,6 +27,7 @@ import HomeScreen from '@/app/index';
 import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
 import { liveEnvironment } from '@/environment/__tests__/fixtures';
 import { EnvironmentProvider } from '@/environment/provider';
+import { SettingsProvider } from '@/settings/provider';
 
 // Hoisted above the imports, so the two entry points are already the mocked copies while the
 // real feed hook, provider, engine, and screen all stay in the path. This is the whole app
@@ -59,7 +60,12 @@ function renderHome() {
   return render(
     <SafeAreaProvider initialMetrics={INSETS}>
       <EnvironmentProvider>
-        <HomeScreen />
+        {/* The SOS module reads its contact list and consent flag from here (PRD §7.2.5/§7.2.6).
+            Storage is the AsyncStorage jest mock, so every test in this file starts from the
+            documented defaults: no contacts, SOS opt-in on. */}
+        <SettingsProvider>
+          <HomeScreen />
+        </SettingsProvider>
       </EnvironmentProvider>
     </SafeAreaProvider>,
   );
@@ -119,11 +125,16 @@ describe('Home dashboard', () => {
     expect(getByText('Updated 30s ago · Simulated data')).toBeTruthy();
   });
 
-  it('still offers SOS, which remains a later phase', async () => {
+  it('offers SOS and says it has nowhere to send until a contact is added', async () => {
     const { getByText } = await renderHome();
 
-    // Present but inert: PRD §7.2.5 owns the cancel window, GPS, and messaging.
     expect(getByText('Emergency SOS')).toBeTruthy();
+    // The button is wired now (PRD §7.2.5), and the contact list starts empty on purpose —
+    // seeding demo numbers beside a live send path would text a stranger on the first press.
+    // Saying so on the button is the difference between an honest default and a silent one.
+    expect(
+      getByText('Add an emergency contact in Settings so this has somewhere to send.'),
+    ).toBeTruthy();
   });
 });
 

@@ -3,10 +3,12 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Card } from '@/components/card';
 import { RiskCard } from '@/components/risk-card';
 import { Screen } from '@/components/screen';
+import { SosAlert } from '@/components/sos-alert';
 import { ThemedText } from '@/components/themed-text';
 import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
 import { useRiskAssessment } from '@/hooks/use-risk-assessment';
+import { useSos } from '@/hooks/use-sos';
 import type { SensorSource } from '@/risk';
 import { formatAge } from '@/utils/format';
 
@@ -35,6 +37,11 @@ function sourceLabel(source: SensorSource): string {
 
 export default function HomeScreen() {
   const { assessment, latest } = useRiskAssessment();
+
+  // The engine reports critical triggers and never acts; this is the one place that hands
+  // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all
+  // live behind `useSos` — the screen only supplies the assessment and renders the overlay.
+  const sos = useSos({ assessment, latest });
 
   // Freshness comes from the timestamp the engine actually evaluated, not from a
   // hand-written string, so the header cannot claim the cards are more current than they
@@ -75,12 +82,19 @@ export default function HomeScreen() {
         <RiskCard key={category.key} category={category} />
       ))}
 
-      <Pressable style={({ pressed }) => [styles.sos, pressed && styles.pressed]}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={sos.press}
+        style={({ pressed }) => [styles.sos, pressed && styles.pressed]}>
         <ThemedText style={styles.sosTitle}>Emergency SOS</ThemedText>
         <ThemedText type="small" style={styles.sosSubtitle}>
-          Sends your location and status to your emergency contacts.
+          {sos.contacts.length === 0
+            ? 'Add an emergency contact in Settings so this has somewhere to send.'
+            : `Alerts ${sos.contacts.length === 1 ? 'your contact' : `your ${sos.contacts.length} contacts`} with your location and status, after a 30-second cancel window.`}
         </ThemedText>
       </Pressable>
+
+      <SosAlert controller={sos} />
     </Screen>
   );
 }

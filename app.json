@@ -10,7 +10,7 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
-        "NSLocationDefaultAccuracyReduced": true
+        "NSLocationDefaultAccuracyReduced": false
       }
     },
     "android": {
@@ -21,8 +21,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.phcmobile",
-      "blockedPermissions": ["android.permission.ACCESS_FINE_LOCATION"]
+      "package": "com.anonymous.phcmobile"
     },
     "web": {
       "output": "static",
@@ -41,7 +40,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Personal Health Companion uses your approximate location to show local heat and air-quality risk. Precise location is never requested.",
+          "locationWhenInUsePermission": "Personal Health Companion uses your approximate location for local heat and air-quality risk, and your precise location only when you send an emergency SOS.",
           "isIosBackgroundLocationEnabled": false,
           "isAndroidBackgroundLocationEnabled": false,
           "isAndroidForegroundServiceEnabled": false

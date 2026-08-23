@@ -7,9 +7,7 @@
  *
  * 1. **Accuracy** — `Accuracy.Low` (~1 km) rather than `High`/`Balanced`, and
  *    `getLastKnownPositionAsync` is tried first so the common case costs no GPS fix at
- *    all. `app.json` additionally blocks `ACCESS_FINE_LOCATION` on Android, so the OS
- *    only ever grants the approximate permission and the app cannot request precise
- *    location even by mistake.
+ *    all.
  * 2. **Rounding** — coordinates are truncated to 2 decimal places (~1.1 km) *before* they
  *    are used. This is the layer that actually matters for privacy, because the
  *    coordinates are sent to a third-party API: without it, a "coarse" fix of
@@ -20,6 +18,15 @@
  *
  * This is the same "no raw personal data leaves the device beyond what the feature needs"
  * posture the rest of the project holds; a precise coordinate is personal data.
+ *
+ * ## Why the manifest no longer enforces it
+ * `app.json` used to block `ACCESS_FINE_LOCATION` outright, which made precise location
+ * unobtainable app-wide. That stopped being tenable when SOS landed: PRD §7.2.5 requires GPS
+ * coordinates in an emergency message and §11 makes "SMS received on a second phone with
+ * location" a success metric, and a ~1–3 km fix is not a location a responder can act on. The
+ * block is gone, so the guarantee for *this* module is now the two layers above rather than
+ * the OS. Keep them. `src/sos/location.ts` is the only place that asks for a precise fix, and
+ * it is only ever called from a committed dispatch.
  *
  * ## Graceful degradation
  * Permission denial is an ordinary outcome, not an error path — the app falls back to a
