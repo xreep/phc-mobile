@@ -45,3 +45,7 @@ example
 # generated native folders
 /ios
 /android
+
+# local debug scratch (screenshots, captured metro stdout)
+/.phc-screens
+/metro-out.log
