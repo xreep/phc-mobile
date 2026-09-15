@@ -29,13 +29,23 @@ export default function HomeScreen() {
   const [simulateFall, setSimulateFall] = useState(false);
   const risk = useRiskColors();
 
-  const { assessment, latest, baselines, live, feedStatus, feedFailure, requestAccess } =
-    useRiskAssessment({ simulateFall });
+  const {
+    assessment,
+    latest,
+    latestVitals,
+    baselines,
+    live,
+    feedStatus,
+    feedFailure,
+    requestAccess,
+  } = useRiskAssessment({ simulateFall });
 
   // The engine reports critical triggers and never acts; this is the one place that hands
   // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all
   // live behind `useSos` — the screen only supplies the assessment and renders the overlay.
-  const sos = useSos({ assessment, latest });
+  // `latestVitals`, not `latest`: on the live feed the newest reading is the motion-only
+  // summary, and the message would otherwise go out without a vitals line.
+  const sos = useSos({ assessment, latest: latestVitals });
 
   // Freshness comes from the timestamp the engine actually evaluated, not from a
   // hand-written string, so the header cannot claim the cards are more current than they

@@ -29,8 +29,14 @@ const settings = jest.mocked(useSettings);
 const NOW = 1_766_000_000_000;
 const requestAccess = jest.fn();
 
+const STILL = { peakG: 1.02, minG: 0.98, rmsG: 1.0, sampleCount: 1500 };
+
 function liveReading(offsetMs: number, bpm: number): SensorReading {
   return { source: 'health_connect', timestamp: NOW + offsetMs, hr: bpm };
+}
+
+function liveAt(offsetMs: number, fields: Partial<SensorReading>): SensorReading {
+  return { source: 'health_connect', timestamp: NOW + offsetMs, ...fields };
 }
 
 beforeEach(() => {
@@ -93,6 +99,49 @@ describe('useRiskAssessment source selection', () => {
     const { result } = await renderHook(() => useRiskAssessment());
     expect(result.current.latest).toBeNull();
     expect(result.current.assessment.sampleCount).toBe(0);
+  });
+
+  it('composes latestVitals from the newest of each vital, not from the motion-only tail', async () => {
+    // The live shape: HR and SpO₂ from the band, then the phone's motion summary stamped at the
+    // poll instant. `latest` is that motion-only reading (the fall rule anchors on it); the SOS
+    // message must still quote the vitals that are 30–45 s old.
+    feed.mockReturnValue({
+      ...feed(),
+      readings: [
+        liveAt(-30_000, { hr: 88 }),
+        liveAt(-45_000, { spo2: 95 }),
+        liveAt(0, { motionSummary: STILL }),
+      ],
+    });
+    const { result } = await renderHook(() => useRiskAssessment());
+    expect(result.current.latest?.motionSummary).toBeDefined();
+    expect(result.current.latest?.hr).toBeUndefined();
+    expect(result.current.latestVitals?.hr).toBe(88);
+    expect(result.current.latestVitals?.spo2).toBe(95);
+    expect(result.current.latestVitals?.skinTempC).toBeUndefined();
+    expect(result.current.latestVitals?.timestamp).toBe(NOW - 30_000);
+  });
+
+  it('reports no latestVitals when only motion has arrived', async () => {
+    feed.mockReturnValue({ ...feed(), readings: [liveAt(0, { motionSummary: STILL })] });
+    const { result } = await renderHook(() => useRiskAssessment());
+    expect(result.current.latest).not.toBeNull();
+    expect(result.current.latestVitals).toBeNull();
+  });
+
+  it('agrees latest and latestVitals on the simulated window, whose every reading carries all vitals', async () => {
+    settings.mockReturnValue({
+      ...settings(),
+      settings: { ...DEFAULT_SETTINGS, sensorSource: 'simulated' },
+    });
+    const { result } = await renderHook(() => useRiskAssessment());
+    const newest = buildMockReadings(NOW).at(-1);
+    expect(result.current.latestVitals).toMatchObject({
+      hr: newest?.hr,
+      spo2: newest?.spo2,
+      skinTempC: newest?.skinTempC,
+      timestamp: newest?.timestamp,
+    });
   });
 
   it('splices the simulated fall onto the live buffer under simulateFall', async () => {

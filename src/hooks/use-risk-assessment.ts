@@ -43,6 +43,7 @@ import {
   type SensorReading,
   type VitalBaselines,
 } from '@/risk';
+import { latestVitalsOf } from '@/sensors/latest-vitals';
 import { useSensorFeed } from '@/sensors/provider';
 import type { SensorFailure, SensorFeedStatus } from '@/sensors/types';
 import { useSettings } from '@/settings/provider';
@@ -57,6 +58,13 @@ export type DashboardRisk = {
    * buffer is at cold start, so the vitals row has to be able to say so.
    */
   readonly latest: SensorReading | null;
+  /**
+   * The newest value of each vital, composed across readings — what the SOS message quotes.
+   * Distinct from `latest` because in live mode the newest reading is the motion-only summary
+   * stamped at the poll instant, which carries no vitals (`latestVitalsOf`). Null when no
+   * reading carries any.
+   */
+  readonly latestVitals: SensorReading | null;
   /** Each vital against its rolling average over the same window (PRD §7.2.1 extension). */
   readonly baselines: VitalBaselines;
   /** True when the readings came from Health Connect rather than the simulated window. */
@@ -104,6 +112,7 @@ export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): Dashb
     return {
       assessment,
       latest: readings.at(-1) ?? null,
+      latestVitals: latestVitalsOf(readings),
       baselines: computeVitalBaselines({ readings, assessment }),
       live,
       feedStatus: feed.status,
