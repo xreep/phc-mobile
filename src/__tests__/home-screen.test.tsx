@@ -27,6 +27,7 @@
  * that override every row assertion here would pass against a hardcoded "In line".
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -35,8 +36,19 @@ import { buildMockReadings } from '@/constants/mock-sensor-window';
 import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
 import { liveEnvironment } from '@/environment/__tests__/fixtures';
 import { EnvironmentProvider } from '@/environment/provider';
+import { checkHealthConnect, grantedVitalsPermissions } from '@/sensors/health-connect';
 import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
+import { SETTINGS_KEY } from '@/settings/store';
+
+// Hoisted above the imports, same reasoning as the `@/environment` mock below: the Health
+// Connect availability/permission checks are swapped for the "Health Connect selected" suite,
+// while the rest of the module (mappers, `readVitals`) stays real.
+jest.mock('@/sensors/health-connect', () => ({
+  ...jest.requireActual('@/sensors/health-connect'),
+  checkHealthConnect: jest.fn(() => Promise.resolve('unavailable')),
+  grantedVitalsPermissions: jest.fn(() => Promise.resolve([])),
+}));
 
 // Hoisted above the imports, so the two entry points are already the mocked copies while the
 // real feed hook, provider, engine, and screen all stay in the path. This is the whole app
@@ -264,5 +276,43 @@ describe('the heat card follows the fetched observation', () => {
     expect(
       getByText('Extreme heat danger — get indoors or into shade and cool down now.'),
     ).toBeTruthy();
+  });
+});
+
+describe('Health Connect selected', () => {
+  beforeEach(async () => {
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        contacts: [],
+        userName: '',
+        sharing: { sos: true, anon_aggregate: false, cloud_backup: false, family_share: false },
+        sensorSource: 'health_connect',
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    await AsyncStorage.clear();
+  });
+
+  it('asks for access instead of showing simulated vitals when nothing is granted', async () => {
+    jest.mocked(checkHealthConnect).mockResolvedValue('available');
+    jest.mocked(grantedVitalsPermissions).mockResolvedValue([]);
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    expect(await screen.findByText('Health Connect access needed')).toBeTruthy();
+    expect(screen.queryByText(/Simulated data/)).toBeNull();
+  });
+
+  it('explains an unavailable Health Connect', async () => {
+    jest.mocked(checkHealthConnect).mockResolvedValue('unavailable');
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    expect(await screen.findByText('Health Connect unavailable')).toBeTruthy();
   });
 });
