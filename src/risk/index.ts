@@ -2,7 +2,7 @@
  * Tier-1 rule-based risk engine (PRD §7.2.2) — public surface.
  *
  * Framework-agnostic and side-effect free: no React, no react-native, no Expo, no
- * clock, no I/O, no module state. It imports exactly three *types* from
+ * clock, no I/O, no module state. It imports exactly four *types* from
  * `@/constants/health-data` and nothing else from the app, which is what lets it be
  * unit-tested in isolation and dropped into both the sensor pipeline and the Dashboard.
  *
@@ -29,15 +29,40 @@
  * It also never *acts*. Critical rules are reported through `criticalRules` and
  * `sosCandidate`; the 30-second cancel window, GPS, messaging, and the consent gate all
  * belong to the SOS module.
+ *
+ * ## `computeVitalBaselines` is the one export that is not a judgement
+ * PRD §7.2.1's baseline extension describes the same readings rather than assessing them — it
+ * returns no level, no score, and no rule id, and nothing downstream may treat a deviation as
+ * a seventh risk signal. It lives here because it needs the same thresholds, the same
+ * plausibility gate, and the same window primitives; it is deliberately not part of
+ * `RiskAssessment`, and it takes an assessment as *input* so the two cannot describe different
+ * stretches of time.
  */
 
 export { assessRisk } from './assess';
+
+export {
+  computeVitalBaselines,
+  formatWindowLabel,
+  type BaselineDelta,
+  type BaselineDirection,
+  type BaselineReport,
+  type VitalBaselineInput,
+  type VitalBaselines,
+} from './baseline';
 
 export {
   DEFAULT_RISK_THRESHOLDS,
   resolveRiskThresholds,
   RISK_ENGINE_TIER,
 } from './config';
+
+export {
+  environmentalContextFor,
+  ENV_CONTEXT_DISCLAIMER,
+  ENV_CONTEXT_LABEL,
+  type EnvironmentalContext,
+} from './env-context';
 
 export {
   celsiusToFahrenheit,
@@ -75,8 +100,12 @@ export type {
   RiskCategoryKey,
   RiskLevel,
   RiskThresholds,
+  RiskTier,
   RuleId,
   SensorReading,
   SensorSource,
   TimedValue,
 } from './types';
+
+/** Part of `BaselineDelta`'s surface, so consumers can name the field they are handed. */
+export type { VitalField } from './window';

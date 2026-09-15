@@ -1,5 +1,5 @@
 /**
- * Shared contract for the four Tier-1 rules (PRD §7.2.2).
+ * Shared contract for the Tier-1 rules (PRD §7.2.2, plus the §7.2.4 advisory extensions).
  *
  * Each rule is a pure `(RuleContext) => RuleOutcome`. Keeping them uniform is what
  * lets `assess.ts` stay a thin fold: it builds the context once, runs the rules, and
@@ -12,6 +12,7 @@ import type {
   EnvironmentSnapshot,
   RiskCategoryKey,
   RiskLevel,
+  RiskTier,
   RuleId,
   RiskThresholds,
   SensorReading,
@@ -23,6 +24,8 @@ export const CATEGORY_LABELS: Readonly<Record<RiskCategoryKey, string>> = {
   respiratory: 'Respiratory',
   cardiovascular: 'Cardiovascular',
   fall: 'Fall Detection',
+  dehydration: 'Dehydration',
+  fatigue: 'Fatigue',
 };
 
 /**
@@ -63,8 +66,14 @@ export type RuleOutcome = {
   readonly score: number;
   /** Short current-reading string for the card's third line. */
   readonly metric: string;
-  /** One-line, plain-language action (PRD §7.2.4). */
+  /** One-line, plain-language action (PRD §7.2.4). Selected by `score` from the category's
+   *  ladder in `./recommend.ts`, so it and `tier` are always the same rung. */
   readonly guidance: string;
+  /** Which rung `guidance` came from; `null` when nothing is elevated and the line is the
+   *  category's steady-state one. */
+  readonly tier: RiskTier | null;
+  /** Concrete steps for that rung, most urgent first. Empty exactly when `tier` is `null`. */
+  readonly actions: readonly string[];
   readonly dataQuality: DataQuality;
   readonly envMultiplier: number;
 };
@@ -119,7 +128,11 @@ export function clampScore(score: number): number {
 }
 
 /** Convenience for the common "nothing to assess" outcome. Green, but honest about
- *  why: `dataQuality` carries the difference between "fine" and "unknown". */
+ *  why: `dataQuality` carries the difference between "fine" and "unknown".
+ *
+ *  No tier and no steps, deliberately. There is nothing to recommend when there is nothing
+ *  to assess, and inventing a mild rung here would put actions on a card whose own metric
+ *  reads `—`. */
 export function unknownOutcome(
   guidance: string,
   metric: string,
@@ -134,6 +147,8 @@ export function unknownOutcome(
     score: 0,
     metric,
     guidance,
+    tier: null,
+    actions: [],
     dataQuality,
     envMultiplier: 1,
   };

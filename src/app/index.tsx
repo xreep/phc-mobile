@@ -1,40 +1,39 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, StyleSheet } from 'react-native';
 
-import { Card } from '@/components/card';
 import { RiskCard } from '@/components/risk-card';
 import { Screen } from '@/components/screen';
+import { SosAlert } from '@/components/sos-alert';
 import { ThemedText } from '@/components/themed-text';
+import { VitalsCard } from '@/components/vitals-card';
 import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
 import { useRiskAssessment } from '@/hooks/use-risk-assessment';
+import { useSos } from '@/hooks/use-sos';
+import { useRiskColors } from '@/hooks/use-theme';
 import type { SensorSource } from '@/risk';
 import { formatAge } from '@/utils/format';
-
-function Stat({ value, unit, label }: { value: string; unit: string; label: string }) {
-  return (
-    <View style={styles.stat}>
-      <View style={styles.statValueRow}>
-        <ThemedText style={styles.statValue}>{value}</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          {unit}
-        </ThemedText>
-      </View>
-      <ThemedText type="small" themeColor="textSecondary">
-        {label}
-      </ThemedText>
-    </View>
-  );
-}
-
-/** Placeholder for a vital the current reading does not carry. */
-const ABSENT = '—';
 
 function sourceLabel(source: SensorSource): string {
   return SENSOR_SOURCES.find((option) => option.key === source)?.label ?? source;
 }
 
 export default function HomeScreen() {
-  const { assessment, latest } = useRiskAssessment();
+  // Dev-only demo control (rendered only under `__DEV__`, below). Arming it hands the risk
+  // engine a window with a real impact-then-stillness sequence spliced into the tail — it does
+  // not touch the SOS state directly. The fall is then detected by `rules/fall.ts` exactly as a
+  // hardware accelerometer's would be, which is the whole point: the demo proves the detector,
+  // not the card. Clearing it returns the window to normal, so the flow can be re-run after a
+  // cancel or a send.
+  const [simulateFall, setSimulateFall] = useState(false);
+  const risk = useRiskColors();
+
+  const { assessment, latest, baselines } = useRiskAssessment({ simulateFall });
+
+  // The engine reports critical triggers and never acts; this is the one place that hands
+  // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all
+  // live behind `useSos` — the screen only supplies the assessment and renders the overlay.
+  const sos = useSos({ assessment, latest });
 
   // Freshness comes from the timestamp the engine actually evaluated, not from a
   // hand-written string, so the header cannot claim the cards are more current than they
@@ -46,26 +45,9 @@ export default function HomeScreen() {
 
   return (
     <Screen title="Dashboard" subtitle={subtitle}>
-      <Card>
-        <ThemedText type="smallBold">Current vitals</ThemedText>
-        <View style={styles.statsRow}>
-          <Stat
-            value={latest?.hr === undefined ? ABSENT : String(Math.round(latest.hr))}
-            unit="bpm"
-            label="Heart rate"
-          />
-          <Stat
-            value={latest?.spo2 === undefined ? ABSENT : String(Math.round(latest.spo2))}
-            unit="%"
-            label="SpO₂"
-          />
-          <Stat
-            value={latest?.skinTempC === undefined ? ABSENT : latest.skinTempC.toFixed(1)}
-            unit="°C"
-            label="Skin temp"
-          />
-        </View>
-      </Card>
+      {/* Both props come from the same `useRiskAssessment` memo, so the numbers and the
+          averages they are compared against describe one evaluation (PRD §7.2.1 ext). */}
+      <VitalsCard latest={latest} baselines={baselines} />
 
       <ThemedText type="smallBold">Risk overview</ThemedText>
       {/* Levels, colours, guidance, and metrics all come from the Tier-1 rule engine
@@ -75,34 +57,52 @@ export default function HomeScreen() {
         <RiskCard key={category.key} category={category} />
       ))}
 
-      <Pressable style={({ pressed }) => [styles.sos, pressed && styles.pressed]}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={sos.press}
+        style={({ pressed }) => [styles.sos, pressed && styles.pressed]}>
         <ThemedText style={styles.sosTitle}>Emergency SOS</ThemedText>
         <ThemedText type="small" style={styles.sosSubtitle}>
-          Sends your location and status to your emergency contacts.
+          {sos.contacts.length === 0
+            ? 'Add an emergency contact in Settings so this has somewhere to send.'
+            : `Alerts ${sos.contacts.length === 1 ? 'your contact' : `your ${sos.contacts.length} contacts`} with your location and status, after a 30-second cancel window.`}
         </ThemedText>
       </Pressable>
+
+      <SosAlert controller={sos} />
+
+      {/* Development builds only — `__DEV__` is false in a release bundle, so this control is
+          absent from the APK's UI entirely. It exists so a fall can be *demonstrated*: see the
+          comment on `simulateFall` above for why it injects a sensor reading rather than setting
+          the card. */}
+      {__DEV__ ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ selected: simulateFall }}
+          onPress={() => setSimulateFall((armed) => !armed)}
+          style={({ pressed }) => [
+            styles.devTool,
+            {
+              borderColor: simulateFall ? risk.red.fg : risk.neutral.fg,
+              backgroundColor: simulateFall ? risk.red.bg : 'transparent',
+            },
+            pressed && styles.pressed,
+          ]}>
+          <ThemedText type="smallBold" style={{ color: simulateFall ? risk.red.fg : risk.neutral.fg }}>
+            {simulateFall ? 'Clear simulated fall' : 'Dev · Simulate a fall'}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.devToolHint}>
+            {simulateFall
+              ? 'A 3.1 g impact followed by stillness is in the sensor window. The Fall Detection card and the SOS countdown above are the risk engine’s own response to it.'
+              : 'Splices a real impact-then-stillness sequence into the sensor window so the fall rule fires and SOS escalates. Not present in release builds.'}
+          </ThemedText>
+        </Pressable>
+      ) : null}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  stat: {
-    gap: Spacing.half,
-  },
-  statValueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: Spacing.one,
-  },
-  statValue: {
-    fontSize: 28,
-    lineHeight: 34,
-    fontWeight: 700,
-  },
   sos: {
     backgroundColor: '#C1121F',
     borderRadius: Spacing.four,
@@ -125,5 +125,19 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.8,
+  },
+  /** Dashed outline so the control reads as instrumentation rather than a product affordance. */
+  devTool: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: Spacing.three,
+    padding: Spacing.three,
+    gap: Spacing.one,
+    marginTop: Spacing.two,
+  },
+  devToolHint: {
+    // Wraps under the label rather than beside it, so the explanation stays readable at the
+    // narrow widths this sits at.
+    flexShrink: 1,
   },
 });

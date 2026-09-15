@@ -57,11 +57,91 @@ import {
   peakG,
   trailingStillRunMs,
 } from '../window';
+import {
+  recommend,
+  tieredGuidance,
+  type Recommendation,
+  type RecommendationLadder,
+} from './recommend';
 import { levelForScore, type RuleContext, type RuleOutcome, unknownOutcome } from './shared';
 
 const SCORE_CRITICAL = 100;
 const SCORE_CONFIRMED = 85;
 const SCORE_UNCONFIRMED = 50;
+
+/**
+ * Fall's recommendation ladder (PRD §7.2.4 ext).
+ *
+ * The one category whose scores are discrete rather than interpolated — the three constants
+ * above are the only non-zero values it can produce — so the ladder here is close to a lookup
+ * table, and its cuts are placed at the band edges the constants already sit inside: 50 in
+ * amber, 85 and 100 in red either side of 90.
+ *
+ * That makes it the clearest illustration of why the rungs are keyed on score anyway. `ongoing`
+ * and `isPending` still decide `criticalRules` and `dataQuality`; they no longer separately
+ * decide the wording, so a future change to `SCORE_CONFIRMED` moves the card's colour and its
+ * advice together instead of leaving one behind.
+ */
+export const FALL_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: 100,
+  rungs: [
+    {
+      minScore: 40,
+      tier: 'mild',
+      headline: 'Sudden movement detected, but you appear to be moving normally.',
+      actions: [
+        'Check yourself for pain or bruising.',
+        'Carry on as normal if you feel fine.',
+      ],
+    },
+    {
+      minScore: 70,
+      tier: 'moderate',
+      headline: 'A possible fall was detected. Are you okay?',
+      actions: [
+        'Sit still for a moment before standing up.',
+        'Check for pain, bleeding, or dizziness.',
+        'Tell someone nearby what happened.',
+      ],
+    },
+    {
+      minScore: 90,
+      tier: 'severe',
+      headline: 'A fall was detected and you have not moved since — help may be needed.',
+      actions: [
+        'Call for help now if you are hurt or cannot get up.',
+        'Do not try to stand if you feel dizzy or in pain.',
+        'Stay where you are until someone reaches you.',
+      ],
+    },
+  ],
+};
+
+/**
+ * The pending case — an impact whose stillness window has not finished being observed.
+ *
+ * Overridden rather than scored, for the same reason as suspected heat collapse: it scores
+ * `SCORE_UNCONFIRMED`, identically to an impact that was *resolved* as no fall, because the
+ * score is a severity and "we do not know yet" is not one. Declared at `mild` so it agrees with
+ * the tier that score selects — `ladderProblems` cannot check an override, so the tier is
+ * asserted in `recommend.test.ts` instead.
+ */
+export const FALL_PENDING_RECOMMENDATION: Recommendation = {
+  tier: 'mild',
+  headline: 'Possible impact detected — checking whether you are moving.',
+  actions: [
+    'Stay where you are for a moment.',
+    'If you are hurt, call someone now — do not wait for the app.',
+  ],
+};
+
+/**
+ * Steady-state fallback for the two impact branches, where a rung is always reached:
+ * `SCORE_UNCONFIRMED`, `SCORE_CONFIRMED`, and `SCORE_CRITICAL` all sit above the ladder's first
+ * `minScore`, which `recommend.test.ts` pins. It exists so that a mis-set ladder degrades to a
+ * sentence that is still true rather than to a blank line under the status.
+ */
+const IMPACT_FALLBACK_GUIDANCE = 'Sudden movement detected.';
 
 function formatG(value: number): string {
   return `${value.toFixed(1)}g`;
@@ -139,6 +219,10 @@ export function assessFall(context: RuleContext): RuleOutcome {
 
     const firedRules: RuleId[] = ['fall.impactThenStillness'];
     const score = ongoing ? SCORE_CRITICAL : SCORE_CONFIRMED;
+    const advice = tieredGuidance(
+      recommend(FALL_RECOMMENDATIONS, score),
+      IMPACT_FALLBACK_GUIDANCE,
+    );
 
     return {
       level: levelForScore(score),
@@ -148,9 +232,7 @@ export function assessFall(context: RuleContext): RuleOutcome {
       criticalRules: ongoing ? ['fall.impactThenStillness'] : [],
       score,
       metric: `Impact ${formatG(impactPeak)}, still ${formatSeconds(confirmed.stillMs)}`,
-      guidance: ongoing
-        ? 'A fall was detected and you have not moved since — help may be needed.'
-        : 'A possible fall was detected. Are you okay?',
+      ...advice,
       dataQuality: withMotion.length < window.minSamples ? 'partial' : 'ok',
       envMultiplier: 1,
     };
@@ -160,6 +242,12 @@ export function assessFall(context: RuleContext): RuleOutcome {
   if (impact !== null) {
     const impactPeak = peakG(impact, plausible.motionG) ?? fall.impactG;
     const isPending = pending !== null;
+    const advice = tieredGuidance(
+      isPending
+        ? FALL_PENDING_RECOMMENDATION
+        : recommend(FALL_RECOMMENDATIONS, SCORE_UNCONFIRMED),
+      IMPACT_FALLBACK_GUIDANCE,
+    );
 
     return {
       level: levelForScore(SCORE_UNCONFIRMED),
@@ -170,9 +258,7 @@ export function assessFall(context: RuleContext): RuleOutcome {
       criticalRules: [],
       score: SCORE_UNCONFIRMED,
       metric: `Impact ${formatG(impactPeak)} detected`,
-      guidance: isPending
-        ? 'Possible impact detected — checking whether you are moving.'
-        : 'Sudden movement detected, but you appear to be moving normally.',
+      ...advice,
       // Pending is genuinely incomplete data: the answer changes on the next tick.
       dataQuality: isPending ? 'partial' : 'ok',
       envMultiplier: 1,
@@ -198,6 +284,9 @@ export function assessFall(context: RuleContext): RuleOutcome {
     guidance: isStale
       ? 'Movement data is out of date.'
       : 'No fall or unusual stillness detected.',
+    // Nothing fired, so there is no rung and nothing to do — see `unknownOutcome`.
+    tier: null,
+    actions: [],
     dataQuality,
     envMultiplier: 1,
   };

@@ -36,6 +36,7 @@
 import { HEAT_STRESS_FLAG_MIN_F } from '../heat-index';
 import type { DataQuality, RuleId, SensorReading } from '../types';
 import { collectSamples, latestSample, restFraction, trailingRun } from '../window';
+import { recommend, tieredGuidance, type RecommendationLadder } from './recommend';
 import {
   clampScore,
   interpolateScore,
@@ -54,6 +55,85 @@ const NORMAL_HR_MIN = 50;
 const SCORE_CEILING_HR = 180;
 /** Floor of the bradycardia ramp. */
 const SCORE_FLOOR_HR = 25;
+
+/**
+ * Two ladders, not one (PRD §7.2.4 ext).
+ *
+ * This is the category where a single ladder cannot work, and the reason is worth stating: the
+ * score is a severity, and severity here is reached from *two directions*. HR 130 sustained at
+ * rest and HR 38 both score about 74. One of them means stop and rest; the other means sit down
+ * because your heart is beating too slowly. A ladder keyed on score alone would have to pick one
+ * of those sentences for both.
+ *
+ * So the predicate chooses which ladder, and the score chooses the rung within it. The tier is
+ * still derived from the score in both cases, which is the invariant that matters — see the
+ * header of `./recommend.ts`.
+ */
+export const TACHYCARDIA_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: 100,
+  rungs: [
+    {
+      minScore: 40,
+      tier: 'mild',
+      headline: 'Heart rate is high — if you are not exercising, stop and rest.',
+      actions: [
+        'Stop and sit down for five minutes.',
+        'Sip water and breathe slowly.',
+      ],
+    },
+    {
+      minScore: 70,
+      tier: 'moderate',
+      headline:
+        'Heart rate has stayed high while you were resting — sit down and seek advice if it continues.',
+      actions: [
+        'Sit down somewhere cool and stay there.',
+        'Drink water slowly.',
+        'Get medical advice if it stays high for another 10 minutes.',
+      ],
+    },
+    {
+      minScore: 90,
+      tier: 'severe',
+      // Reachable from either predicate: `scoreFor` crosses 90 at 160 bpm.
+      headline: 'Heart rate is very high while you are resting — get medical help.',
+      actions: [
+        'Call for medical help now.',
+        'Sit or lie down and do not walk anywhere.',
+        'Say if you feel chest pain, breathlessness, or faint.',
+      ],
+    },
+  ],
+};
+
+/**
+ * Bradycardia's ladder. Two rungs, both red — PRD §7.2.2's `HR < 40` has no advisory band in
+ * front of it, so this category's amber belongs entirely to unconfirmed tachycardia.
+ */
+export const BRADYCARDIA_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: 100,
+  rungs: [
+    {
+      minScore: 70,
+      tier: 'moderate',
+      headline: 'Heart rate is unusually low — sit down and get medical advice.',
+      actions: [
+        'Sit or lie down before you feel faint.',
+        'Get medical advice today, not tomorrow.',
+      ],
+    },
+    {
+      minScore: 90,
+      tier: 'severe',
+      headline: 'Heart rate is dangerously low — get medical help now.',
+      actions: [
+        'Call for medical help now.',
+        'Lie down with your legs raised.',
+        'Do not be alone until you have been seen.',
+      ],
+    },
+  ],
+};
 
 function metricFor(hr: number): string {
   // Matches the mock's "HR 78 bpm".
@@ -193,15 +273,17 @@ export function assessCardiovascular(context: RuleContext): RuleOutcome {
     ),
   );
 
-  const guidance = bradycardia
-    ? 'Heart rate is unusually low — sit down and get medical advice.'
-    : tachycardiaFlag
-      ? 'Heart rate has stayed high while you were resting — sit down and seek advice if it continues.'
-      : tachycardiaAdvisory
-        ? 'Heart rate is high — if you are not exercising, stop and rest.'
-        : isStale
-          ? 'Heart-rate reading is out of date.'
-          : 'Resting heart rate looks normal.';
+  // Which ladder is a question about *direction*, which the score cannot answer — see
+  // TACHYCARDIA_RECOMMENDATIONS. Which rung is a question about severity, which is the only
+  // thing the score is asked. Bradycardia wins the same way it wins `firedRules`: at these
+  // thresholds it is the more immediately dangerous of the two.
+  const advice = tieredGuidance(
+    recommend(
+      bradycardia ? BRADYCARDIA_RECOMMENDATIONS : TACHYCARDIA_RECOMMENDATIONS,
+      score,
+    ),
+    isStale ? 'Heart-rate reading is out of date.' : 'Resting heart rate looks normal.',
+  );
 
   // Naming the peak matters when it is not the current value: a red card reading
   // "HR 119 bpm" contradicts itself, and the peak is what the level was decided on.
@@ -218,7 +300,7 @@ export function assessCardiovascular(context: RuleContext): RuleOutcome {
     criticalRules: [],
     score,
     metric,
-    guidance,
+    ...advice,
     dataQuality,
     envMultiplier,
   };

@@ -16,6 +16,17 @@
 export type RiskLevel = 'green' | 'amber' | 'red';
 
 /**
+ * Severity rung the guidance was chosen at (PRD §7.2.4 extension).
+ *
+ * Deliberately *not* a second traffic light. `RiskLevel` is the card's colour and comes from
+ * the score's band; the tier is a finer cut *inside* a band, so a category can say something
+ * different at the bottom of amber than at the top of it. The engine guarantees the two agree
+ * — `mild` never appears on a red card, `severe` never on an amber one — which is enforced in
+ * `src/risk/rules/recommend.ts` rather than by convention.
+ */
+export type RiskTier = 'mild' | 'moderate' | 'severe';
+
+/**
  * One dashboard risk card.
  *
  * The Dashboard no longer holds a hardcoded array of these: the Tier-1 rule engine
@@ -25,11 +36,28 @@ export type RiskLevel = 'green' | 'amber' | 'red';
  * coupling to the app — see the header of `src/risk/types.ts`.
  */
 export type RiskCategory = {
-  key: 'heat' | 'respiratory' | 'cardiovascular' | 'fall';
+  /**
+   * `heat` | `respiratory` | `cardiovascular` | `fall` are the four PRD §7.2.2 flag
+   * categories. `dehydration` and `fatigue` are Tier-1 *advisory* categories: they are
+   * computed by the same engine from the same window, but they are not among the six
+   * §7.2.2 flags, so they never set `flagged` and never contribute to an SOS. Widening
+   * this union is deliberately a breaking change — `CATEGORY_LABELS`, `CATEGORY_ORDER`
+   * and the `outcomes` record in `assess.ts` are all keyed by it, so a new category
+   * cannot be added without the compiler naming every place that has to handle it.
+   */
+  key: 'heat' | 'respiratory' | 'cardiovascular' | 'fall' | 'dehydration' | 'fatigue';
   label: string;
   level: RiskLevel;
-  /** One-line, plain-language guidance shown under the status. */
+  /** One-line, plain-language guidance shown under the status. Tier-selected — see `tier`. */
   guidance: string;
+  /**
+   * Which rung of the category's ladder `guidance` came from, or `null` when nothing is
+   * elevated and the line is the steady-state one. Optional so a hand-built category (a
+   * placeholder, a fixture) does not have to invent one.
+   */
+  tier?: RiskTier | null;
+  /** Concrete steps for that rung, most urgent first. Empty when `tier` is `null`. */
+  actions?: readonly string[];
   /** Short current-reading string, e.g. "SpO₂ 97%". */
   metric?: string;
 };
@@ -70,7 +98,14 @@ export type TrendSeries = {
   points: number[];
 };
 
-/** 24hr / 7-day vitals history (PRD §7.2.4 Trends). */
+/**
+ * Fixed 24hr / 7-day example series for the Trends screen (PRD §7.2.4 Trends).
+ *
+ * Not a recorded history: PRD §7.2.1 ingestion has not landed, so no vitals are written to disk
+ * anywhere in this build. These are demo curves showing what the screen will look like once
+ * there is a buffer to draw. `app/trends.tsx` says so on screen — see the banner there for why
+ * that disclosure is load-bearing rather than decorative.
+ */
 export const TRENDS: Record<TrendRange, TrendSeries[]> = {
   '24h': [
     {
@@ -138,17 +173,16 @@ export const TRENDS: Record<TrendRange, TrendSeries[]> = {
   ],
 };
 
-export type EmergencyContact = {
-  id: string;
-  name: string;
-  relation: string;
-  phone: string;
-};
-
-export const EMERGENCY_CONTACTS: EmergencyContact[] = [
-  { id: 'c1', name: 'Priya Sharma', relation: 'Sister', phone: '+91 98765 43210' },
-  { id: 'c2', name: 'Dr. Anand Rao', relation: 'Physician', phone: '+91 91234 56780' },
-];
+/*
+ * Emergency contacts now live in persisted settings, not here.
+ *
+ * The demo array that used to sit at this spot held two realistic-looking Indian numbers, which
+ * was harmless while SOS was a button with no `onPress` and became dangerous the moment it had
+ * one: `+91 98765 43210` normalizes to a structurally valid E.164 number, so no validation
+ * layer would have stopped a demo tap from texting a stranger. The list is empty by default —
+ * see `src/settings/store.ts` — and `EmergencyContact` is declared in `src/sos/types.ts`, next
+ * to the E.164 guarantee the send path depends on. Import it from `@/sos`.
+ */
 
 export type SensorSourceOption = {
   key: 'health_connect' | 'ble_esp32' | 'simulated';

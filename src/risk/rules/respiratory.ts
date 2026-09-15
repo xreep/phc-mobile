@@ -13,6 +13,7 @@
 
 import type { DataQuality, RuleId } from '../types';
 import { collectSamples, latestSample } from '../window';
+import { recommend, tieredGuidance, type RecommendationLadder } from './recommend';
 import {
   CATEGORY_LABELS,
   clampScore,
@@ -27,6 +28,47 @@ import {
 const NORMAL_SPO2 = 97;
 /** Floor of the critical ramp: at or below this the score is pinned at 100. */
 const SCORE_FLOOR_SPO2 = 80;
+
+/**
+ * Respiratory's recommendation ladder (PRD §7.2.4 ext).
+ *
+ * Two rungs, and the missing `mild` is the point: this category has no amber. `scoreFor` sends
+ * everything above the 92 % threshold into green and everything below it into red, because
+ * PRD §7.2.2's flag is a hard `<` with no advisory band in front of it. A ladder that invented
+ * a mild rung to fill the gap would be inventing a level the rule cannot produce.
+ *
+ * **This is also the fix for a real disagreement.** The rungs used to be selected by predicate:
+ * `criticalConfirmed` for the top sentence, `flagged` for the other. `criticalConfirmed`
+ * additionally requires `spo2.criticalMinSamples` readings below 85 % — so a single reading of
+ * 82 % scored 92/100, coloured the card **Alert**, and printed "sit upright, rest, and breathe
+ * slowly" underneath. Selecting on the score instead means the confirmation requirement still
+ * governs the SOS trigger, where it belongs, and no longer governs what the user is told.
+ */
+export const RESPIRATORY_RECOMMENDATIONS: RecommendationLadder = {
+  ceiling: 100,
+  rungs: [
+    {
+      minScore: 70,
+      tier: 'moderate',
+      headline: 'Blood oxygen is below normal — sit upright, rest, and breathe slowly.',
+      actions: [
+        'Sit upright and stop what you are doing.',
+        'Breathe slowly through your nose for a few minutes.',
+        'Get medical advice if it does not come back up.',
+      ],
+    },
+    {
+      minScore: 90,
+      tier: 'severe',
+      headline: 'Blood oxygen is critically low — get medical help now.',
+      actions: [
+        'Call for medical help now.',
+        'Sit upright — do not lie flat.',
+        'Stay with someone who can act if you cannot.',
+      ],
+    },
+  ],
+};
 
 function metricFor(spo2: number): string {
   // Matches the mock's "SpO₂ 97%" formatting so the card is visually unchanged.
@@ -114,13 +156,12 @@ export function assessRespiratory(context: RuleContext): RuleOutcome {
 
   const score = clampScore(scoreFor(spo2, thresholds.spo2.flagBelow, thresholds.spo2.criticalBelow));
 
-  const guidance = criticalConfirmed
-    ? 'Blood oxygen is critically low — get medical help now.'
-    : flagged
-      ? 'Blood oxygen is below normal — sit upright, rest, and breathe slowly.'
-      : isStale
-        ? 'Blood-oxygen reading is out of date.'
-        : 'Blood oxygen is in the normal range.';
+  // `criticalConfirmed` still decides the SOS trigger below and no longer decides the wording —
+  // an unconfirmed 82 % now reads as the severe rung its score already put it in.
+  const advice = tieredGuidance(
+    recommend(RESPIRATORY_RECOMMENDATIONS, score),
+    isStale ? 'Blood-oxygen reading is out of date.' : 'Blood oxygen is in the normal range.',
+  );
 
   return {
     // Derived from the score so the card and the fusion layer can never disagree.
@@ -131,7 +172,7 @@ export function assessRespiratory(context: RuleContext): RuleOutcome {
     criticalRules: criticalConfirmed ? ['respiratory.spo2.critical'] : [],
     score,
     metric: metricFor(spo2),
-    guidance,
+    ...advice,
     dataQuality,
     envMultiplier,
   };

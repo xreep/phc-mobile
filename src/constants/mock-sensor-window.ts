@@ -83,6 +83,23 @@ const ACTIVE: MotionSummary = { peakG: 1.62, minG: 0.74, rmsG: 1.06, sampleCount
 const STILL: MotionSummary = { peakG: 1.04, minG: 0.97, rmsG: 1.0, sampleCount: 60 };
 
 /**
+ * A fall's motion signature, for the dev-only demo trigger (see {@link MockReadingOptions}).
+ *
+ * Both of `findImpacts`' clauses are cleared deliberately, because only one of them does real
+ * work. `peakG` (3.1) is over `fall.impactG` (2.5), but `ACTIVE` above already shows why a peak
+ * alone proves nothing: at this aggregation cadence `peakG` is a maximum over ~60 raw samples,
+ * and `rules/fall.ts` documents that an ordinary pocket footstrike reaches the same 2–2.5 g as a
+ * fall. The discriminator is `minG` (0.32), under `fall.freeFallMaxG` (0.65) — the near-weightless
+ * phase that walking does not have. A demo sample that only raised the peak would be caught by
+ * the free-fall clause and detect nothing, which is the correct behaviour and the reason this
+ * constant carries both numbers rather than one.
+ *
+ * Every value stays inside `plausible.motionG` (0–32 g), so `motionEstimate` accepts the reading
+ * instead of discarding it as implausible.
+ */
+const FALL_IMPACT: MotionSummary = { peakG: 3.1, minG: 0.32, rmsG: 1.12, sampleCount: 60 };
+
+/**
  * Oldest → newest, one entry per reading. Values are ordinary and unremarkable on
  * purpose: any red card on the Dashboard should come from the environment, so that anyone
  * reading the output can tell a weather-driven flag apart from a physiological one.
@@ -127,15 +144,63 @@ const MOTION: readonly MotionSummary[] = [
 ];
 
 /**
+ * The same window with a fall spliced into the tail, for the dev-only "Simulate Fall" control
+ * on the Dashboard (see {@link MockReadingOptions}).
+ *
+ * Identical to `MOTION` except the last three samples become impact → still → still. At the
+ * demo's 60 s cadence with the newest reading 30 s old, the impact lands at `now − 150 s` and
+ * the two still readings at `now − 90 s` and `now − 30 s`. `rules/fall.ts` then finds the impact,
+ * has `stillnessWindowMs` (130 s) of search space after it, measures a 60 s still run inside that
+ * (over `stillnessMs`, 10 s) → *confirmed*, and — because the newest reading is still too —
+ * reports the stillness as still *ongoing* → `SCORE_CRITICAL`, with `fall.impactThenStillness`
+ * in `criticalRules`. That last flag is what makes the assessment an SOS candidate, so the demo
+ * drives the countdown end-to-end through the real engine rather than faking the card.
+ *
+ * Two trailing still readings are the minimum: a single one spans zero milliseconds, which would
+ * confirm the fall but leave `trailingStillRunMs` at 0, so the escalation to `SCORE_CRITICAL`
+ * (and therefore the SOS) would not fire.
+ */
+const FALL_MOTION: readonly MotionSummary[] = [
+  ...MOTION.slice(0, SAMPLE_COUNT - 3),
+  FALL_IMPACT,
+  STILL,
+  STILL,
+];
+
+/**
+ * Options for {@link buildMockReadings}.
+ *
+ * ## Why the demo trigger injects an *input* rather than setting an output
+ * `simulateFall` exists so a fall can be **demonstrated** on a running app, and it deliberately
+ * works at this layer: it changes the reading buffer the engine is handed, and nothing
+ * downstream is told that anything unusual happened. `assessFall` finds the impact, measures the
+ * stillness after it, and escalates on its own terms — the same code path a real accelerometer
+ * would drive. A flag that forced the fall card red, or that pushed `fall.impactThenStillness`
+ * into `criticalRules` directly, would demonstrate the *card* and prove nothing about the
+ * detector. It would also be a live lie in the one direction that matters: the rule would look
+ * reachable in a demo while being unreachable on hardware, which is precisely the failure class
+ * this engine has repeatedly been dug out of.
+ *
+ * The Dashboard gates the affordance behind `__DEV__`, so it is absent from release builds.
+ */
+export type MockReadingOptions = {
+  /** Splice an impact-then-stillness sequence into the tail of the window. See {@link FALL_MOTION}. */
+  readonly simulateFall?: boolean;
+};
+
+/**
  * The demo's rolling sensor buffer, oldest → newest, as PRD §7.2.1's unified schema.
  *
  * @param now Evaluation instant in epoch ms. The newest reading lands
  *   `LATEST_AGE_MS` before it, so the window is fresh relative to whatever the caller
  *   is about to pass to `assessRisk`.
+ * @param options Dev-only shaping of the window. Omitting it — the production call — yields
+ *   exactly the window this file has always produced.
  */
-export function buildMockReadings(now: number): SensorReading[] {
+export function buildMockReadings(now: number, options: MockReadingOptions = {}): SensorReading[] {
   const newest = now - LATEST_AGE_MS;
   const oldestIndex = SAMPLE_COUNT - 1;
+  const motion = options.simulateFall === true ? FALL_MOTION : MOTION;
 
   return Array.from({ length: SAMPLE_COUNT }, (_unused, index) => ({
     source: 'simulated' as const,
@@ -143,7 +208,7 @@ export function buildMockReadings(now: number): SensorReading[] {
     hr: HR_BPM[index],
     spo2: SPO2_PCT[index],
     skinTempC: SKIN_TEMP_C[index],
-    motionSummary: MOTION[index],
+    motionSummary: motion[index],
   }));
 }
 
@@ -177,4 +242,6 @@ export const MOCK_WINDOW = {
   spanMs: (SAMPLE_COUNT - 1) * INTERVAL_MS,
   active: ACTIVE,
   still: STILL,
+  /** The `simulateFall` impact sample, so its thresholds can be asserted against config. */
+  fallImpact: FALL_IMPACT,
 } as const;

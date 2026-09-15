@@ -21,11 +21,22 @@
  * The feed hook is mocked rather than driven: the four states it can be in are already pinned
  * in `use-environment.test.ts`, and reaching them through a real fetch here would test the
  * hook again instead of the rendering.
+ *
+ * The last describe covers the one section of this screen that is *not* live — the static flood
+ * and cyclone guides — and it is here rather than only in a component test because its correctness
+ * is a fact about its neighbours: the live cards are two card-lengths above it.
  */
 
 import { fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import {
+  PREPAREDNESS_ADVISORIES,
+  PREPAREDNESS_BADGE,
+  PREPAREDNESS_DISCLAIMER,
+  PREPAREDNESS_HEADING,
+  PREPAREDNESS_INTRO,
+} from '@/advisories';
 import EnvironmentScreen from '@/app/environment';
 import type { LocationFallbackReason } from '@/environment';
 import { liveEnvironment } from '@/environment/__tests__/fixtures';
@@ -284,6 +295,95 @@ describe('showing saved data offline', () => {
   it('does not claim live data is saved', async () => {
     const { queryByText } = await renderScreen();
     expect(queryByText('Showing the last saved reading')).toBeNull();
+  });
+});
+
+/**
+ * The static section, in context.
+ *
+ * This is the half of the E3 check that a component test cannot make. `preparedness-card.test.tsx`
+ * proves the card renders its own content correctly; what matters here is the *neighbourhood* —
+ * these two cards sit directly beneath the live heat and air-quality cards, and the question is
+ * whether a reader could carry the assumption of liveness across that boundary. So the assertions
+ * below are comparative: the live advisory card has a level chip and a named provenance, this one
+ * has a neutral badge and a disclaimer, and the two never swap.
+ */
+describe('the static preparedness section', () => {
+  const LIVE_ADVISORY = {
+    id: 'heat-index',
+    source: 'NOAA heat index',
+    title: 'Extreme Danger heat — feels like 56°C',
+    detail: 'Avoid outdoor exertion. Heat stroke is likely with continued exposure.',
+    level: 'red' as const,
+  };
+
+  it('renders both hazards beneath the live cards, under its own heading', async () => {
+    const { getByText } = await renderScreen();
+
+    expect(getByText(PREPAREDNESS_HEADING)).toBeTruthy();
+    expect(getByText(PREPAREDNESS_INTRO)).toBeTruthy();
+    for (const advisory of PREPAREDNESS_ADVISORIES) {
+      expect(getByText(advisory.title)).toBeTruthy();
+    }
+    // The live cards are still the screen's primary content, not displaced by the static text.
+    expect(getByText('Weather')).toBeTruthy();
+    expect(getByText('Air Quality')).toBeTruthy();
+  });
+
+  it('labels every static card as not based on live conditions', async () => {
+    const { getAllByText } = await renderScreen();
+
+    // One per hazard. `getAllByText` with a length assertion rather than `getByText`, which would
+    // throw on the second match and hide the fact that both cards carry it.
+    expect(getAllByText(PREPAREDNESS_DISCLAIMER)).toHaveLength(PREPAREDNESS_ADVISORIES.length);
+    expect(getAllByText(PREPAREDNESS_BADGE)).toHaveLength(PREPAREDNESS_ADVISORIES.length);
+  });
+
+  it('is still there when there is no live data at all, which is when it matters most', async () => {
+    // The reason it renders outside the `environment === null` guard: a flood knocks the towers
+    // down, and guidance gated behind a successful fetch is absent exactly then.
+    const { getByText, queryByText } = await renderScreen({ environment: null, status: 'error' });
+
+    expect(getByText(PREPAREDNESS_HEADING)).toBeTruthy();
+    expect(getByText('Flood')).toBeTruthy();
+    expect(getByText('Cyclone')).toBeTruthy();
+    // And the live half is genuinely absent, so this is not passing because everything renders.
+    expect(queryByText('Weather')).toBeNull();
+    expect(queryByText('Air Quality')).toBeNull();
+  });
+
+  it('keeps the live card and the static card visibly different kinds of thing', async () => {
+    const { getByText, queryAllByText } = await renderScreen({
+      environment: liveEnvironment({ advisories: [LIVE_ADVISORY] }),
+    });
+
+    // The live advisory names what produced it and carries a red level chip.
+    expect(getByText(LIVE_ADVISORY.title)).toBeTruthy();
+    expect(getByText('NOAA heat index')).toBeTruthy();
+
+    // The static cards carry neither: no provenance to name, and no measurement to level. If a
+    // future edit gave them a source or a level chip, one of these two counts would change.
+    expect(queryAllByText(PREPAREDNESS_BADGE)).toHaveLength(2);
+    expect(queryAllByText(PREPAREDNESS_DISCLAIMER)).toHaveLength(2);
+    // `RiskCard`'s status vocabulary must not appear anywhere on this screen — the live cards use
+    // band labels ("Extreme Danger", "Unhealthy"), and the static cards use no verdict at all.
+    for (const word of ['Normal', 'Caution', 'Alert']) {
+      expect(queryAllByText(word)).toHaveLength(0);
+    }
+  });
+
+  it('opens one hazard without opening the other', async () => {
+    const screen = await renderScreen();
+
+    // Awaited: `fireEvent` is async in react-native-testing-library v14, and this press causes a
+    // state update. The refresh test below gets away without it because it only asserts a mock
+    // call, not a re-render.
+    await fireEvent.press(screen.getByLabelText('Show flood advisory steps'));
+
+    expect(screen.getByText('Drinking water and food')).toBeTruthy();
+    // The cyclone card has its own state; a shared toggle would expand both.
+    expect(screen.queryByText('Before the storm')).toBeNull();
+    expect(screen.getByLabelText('Show cyclone advisory steps')).toBeTruthy();
   });
 });
 
