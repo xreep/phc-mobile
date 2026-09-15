@@ -970,3 +970,28 @@ describe('longestLookbackMs', () => {
   });
 });
 
+describe('live-shaped buffers (vitals and motion as separate readings)', () => {
+  /** One motion reading per minute; an HR sample 30 s after each. Impact two minutes ago. */
+  function liveShaped(): SensorReading[] {
+    const out: SensorReading[] = [];
+    for (let m = -20; m <= 0; m += 1) {
+      out.push(
+        reading({
+          at: at(m * MINUTE),
+          source: 'health_connect',
+          motionSummary: m === -2 ? { peakG: 3.1, minG: 0.32, rmsG: 1.12, sampleCount: 1500 } : stillMotion(1500),
+        }),
+      );
+      if (m < 0) out.push(reading({ at: at(m * MINUTE + 30_000), source: 'health_connect', hr: 74 }));
+    }
+    return out;
+  }
+
+  it('confirms an impact followed by stillness and escalates it, despite interleaved vitals', () => {
+    const assessment = assessRisk({ readings: liveShaped(), now: at(0) });
+    expect(assessment.byCategory.fall.rule).toBe('fall.impactThenStillness');
+    expect(assessment.byCategory.fall.criticalRules).toContain('fall.impactThenStillness');
+    expect(assessment.sosCandidate).toBe(true);
+  });
+});
+
