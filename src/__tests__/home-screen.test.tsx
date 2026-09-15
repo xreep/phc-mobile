@@ -35,6 +35,7 @@ import { buildMockReadings } from '@/constants/mock-sensor-window';
 import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
 import { liveEnvironment } from '@/environment/__tests__/fixtures';
 import { EnvironmentProvider } from '@/environment/provider';
+import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
 
 // Hoisted above the imports, so the two entry points are already the mocked copies while the
@@ -91,7 +92,9 @@ function renderHome() {
             Storage is the AsyncStorage jest mock, so every test in this file starts from the
             documented defaults: no contacts, SOS opt-in on. */}
         <SettingsProvider>
-          <HomeScreen />
+          <SensorProvider>
+            <HomeScreen />
+          </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>
     </SafeAreaProvider>,
