@@ -243,9 +243,11 @@ export function buildEnvironmentSnapshot(
  * Every live *vital* is kept untouched — the point is to prove the detector on real data.
  *
  * The tail lands at exactly `now`, not `now − LATEST_AGE_MS` as the mock does, because
- * `rules/fall.ts` measures the ongoing stillness from the *newest* reading and the live buffer
- * has HR samples right up to the poll instant; a still sample any older would be outranked by
- * a motion-less HR reading and the escalation to SOS would not fire.
+ * `rules/fall.ts` anchors the ongoing stillness on the newest *motion-bearing* reading
+ * (motion-less HR samples are skipped). The live feed stamps its own motion reading at the
+ * poll instant, which is the newest any live reading can be; a spliced tail any older would
+ * be outranked by a live motion reading and the run would break there. So the tail is placed
+ * at `now` — the poll instant — and live motion inside the span is stripped.
  */
 export function spliceSimulatedFall(
   readings: readonly SensorReading[],

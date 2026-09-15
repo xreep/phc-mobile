@@ -13,6 +13,9 @@ npx expo prebuild --platform android
 npx expo run:android
 ```
 
+`react-native-health-connect` raises `minSdkVersion` to 26 (Android 8.0), so Android 7.x devices
+are no longer supported. Prebuild writes that value into `android/gradle.properties`.
+
 On the phone: install/update **Health Connect** from the Play Store (built into Android 14+),
 pair a band or watch whose companion app writes heart rate / SpO₂ / skin temperature to it,
 then in this app choose Settings → Sensor source → Android Health Connect and tap the
@@ -39,4 +42,6 @@ rule sees a full window.
 
 In a development build the Dashboard's "Dev · Simulate a fall" control works on the live buffer
 too: it splices a real impact-then-stillness motion sequence onto the tail and lets
-`rules/fall.ts` detect it. Vitals are untouched.
+`rules/fall.ts` detect it. Vitals are untouched. While the control is on, the Dashboard subtitle
+reads "Simulated data" rather than "Android Health Connect": the spliced tail is the newest
+reading, and the subtitle names the source of whatever is newest.
