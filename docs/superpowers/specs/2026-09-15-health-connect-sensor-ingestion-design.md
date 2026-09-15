@@ -26,6 +26,7 @@ Out of scope: Trends screen, TFLite, ESP32/BLE, iOS/HealthKit.
 | Permission prompts | Only from user-initiated `requestAccess()`; the interval and AppState paths never prompt | Same discipline as `use-environment.ts` — an unbidden dialog is how a permission gets permanently denied. |
 | Buffer length | `longestLookbackMs(thresholds) + 2 × POLL_INTERVAL_MS`, read from `resolveRiskThresholds()` via a new export in `risk/assess.ts` | Not hardcoded; `RiskAssessmentInput` doc requires the buffer to span the engine's longest lookback. |
 | simulateFall | Kept, dev-only. In live mode the same `FALL_IMPACT` + stillness tail is spliced onto the live buffer. | Proves the detector on real data during the demo without a physical fall. |
+| Engine still-run primitives | `longestStillRunMs` / `trailingStillRunMs` skip readings with no motion data instead of breaking on them; `maxGapMs` is measured between motion-bearing readings. | Probed: with HR samples interleaved between per-minute motion readings (the live shape) every still run was zero, so `fall.impactThenStillness` and `heat.stillness.critical` were unsatisfiable on real hardware. Dropouts still break the run via the gap check. Approved 2026-09-15. |
 
 ## Modules
 
