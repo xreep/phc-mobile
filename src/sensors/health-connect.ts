@@ -26,6 +26,17 @@
  * so a genuinely alarming reading is never silenced at the adapter.
  */
 
+import { Platform } from 'react-native';
+import {
+  getGrantedPermissions,
+  getSdkStatus,
+  initialize,
+  readRecords,
+  requestPermission,
+  SdkAvailabilityStatus,
+  type Permission,
+} from 'react-native-health-connect';
+
 import type { SensorReading } from '@/risk';
 
 export const HEALTH_CONNECT_SOURCE = 'health_connect' as const;
@@ -97,4 +108,85 @@ export function mapSkinTemperature(records: readonly SkinTemperatureInput[]): Se
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------------------
+// I/O
+// ---------------------------------------------------------------------------------------
+
+export const VITALS_RECORD_TYPES = ['HeartRate', 'OxygenSaturation', 'SkinTemperature'] as const;
+export type VitalsRecordType = (typeof VITALS_RECORD_TYPES)[number];
+
+/** Read-only, and only these three — PRD §7.2.6 data minimisation. */
+export const VITALS_PERMISSIONS: readonly Permission[] = VITALS_RECORD_TYPES.map(
+  (recordType): Permission => ({ accessType: 'read', recordType }),
+);
+
+export type HealthConnectAvailability = 'available' | 'unavailable' | 'update-required';
+
+/**
+ * Whether Health Connect can be used at all. Guards on the platform *before* touching the
+ * module: on iOS the native side is absent and any call throws.
+ */
+export async function checkHealthConnect(): Promise<HealthConnectAvailability> {
+  if (Platform.OS !== 'android') return 'unavailable';
+  const status = await getSdkStatus();
+  if (status === SdkAvailabilityStatus.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
+    return 'update-required';
+  }
+  if (status !== SdkAvailabilityStatus.SDK_AVAILABLE) return 'unavailable';
+  return (await initialize()) ? 'available' : 'unavailable';
+}
+
+function grantedVitals(
+  permissions: readonly { readonly accessType: string; readonly recordType: string }[],
+): VitalsRecordType[] {
+  return VITALS_RECORD_TYPES.filter((recordType) =>
+    permissions.some((p) => p.accessType === 'read' && p.recordType === recordType),
+  );
+}
+
+/** Silent — reads the current grant state without a dialog. */
+export async function grantedVitalsPermissions(): Promise<VitalsRecordType[]> {
+  return grantedVitals(await getGrantedPermissions());
+}
+
+/** Raises the Health Connect permission dialog. User-initiated paths only. */
+export async function requestVitalsAccess(): Promise<VitalsRecordType[]> {
+  return grantedVitals(await requestPermission([...VITALS_PERMISSIONS]));
+}
+
+export type ReadVitalsOptions = {
+  readonly sinceMs: number;
+  readonly untilMs: number;
+  readonly granted: readonly VitalsRecordType[];
+};
+
+/**
+ * Every granted vital in `(sinceMs, untilMs]`, as readings, ascending.
+ *
+ * Not paginated: `readRecords` pages by *record*, a record holds many samples, and the widest
+ * range this is ever asked for is the engine's lookback (~20 min) — far inside a page.
+ */
+export async function readVitals({ sinceMs, untilMs, granted }: ReadVitalsOptions): Promise<SensorReading[]> {
+  if (granted.length === 0) return [];
+
+  const timeRangeFilter = {
+    operator: 'between' as const,
+    startTime: new Date(sinceMs).toISOString(),
+    endTime: new Date(untilMs).toISOString(),
+  };
+  const options = { timeRangeFilter, ascendingOrder: true };
+
+  const [heartRate, oxygen, skin] = await Promise.all([
+    granted.includes('HeartRate') ? readRecords('HeartRate', options) : null,
+    granted.includes('OxygenSaturation') ? readRecords('OxygenSaturation', options) : null,
+    granted.includes('SkinTemperature') ? readRecords('SkinTemperature', options) : null,
+  ]);
+
+  return [
+    ...mapHeartRate(heartRate?.records ?? []),
+    ...mapOxygenSaturation(oxygen?.records ?? []),
+    ...mapSkinTemperature(skin?.records ?? []),
+  ].sort((a, b) => a.timestamp - b.timestamp);
 }
