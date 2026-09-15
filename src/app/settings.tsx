@@ -139,9 +139,11 @@ export default function SettingsScreen() {
         ))}
       </Card>
       <ThemedText type="small" themeColor="textSecondary">
-        All sharing is off by default except emergency SOS. No raw health data leaves your device.
-        Turning off emergency SOS stops the app alerting your contacts at all, including
-        automatically.
+        All sharing is off by default except emergency SOS, which is the one path that sends
+        anything off this device: an SOS carries your name, your latest vitals, and your
+        coordinates to the contacts you have added, through your SMS app or your configured relay.
+        Nothing else is uploaded anywhere. Turning off emergency SOS stops the app alerting your
+        contacts at all, including automatically.
       </ThemedText>
 
       <ThemedText type="smallBold">Sensor source</ThemedText>

@@ -17,11 +17,26 @@
  *   app happened to render.
  * - **Whether it came from the network or from disk** — a cached reading is still useful
  *   offline, but the user should know that is what they are looking at.
+ *
+ * ## The one section that is not live, and why it is still here
+ * "Preparedness guides" at the foot of the screen is fixed reference text for flood and cyclone —
+ * no fetch, no measurement, no level. It does not contradict the paragraph above, because it
+ * contains no numbers and claims no observation: every card carries
+ * `PREPAREDNESS_DISCLAIMER` under its title and a neutral badge instead of a traffic-light pill,
+ * so it cannot be read as a warning for this place at this time. It renders outside the
+ * `environment === null` guard, which is the point of having it — the guidance matters most when
+ * the network is gone, and text gated behind a successful fetch is absent exactly then.
  */
 
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import {
+  PREPAREDNESS_ADVISORIES,
+  PREPAREDNESS_HEADING,
+  PREPAREDNESS_INTRO,
+} from '@/advisories';
 import { Card } from '@/components/card';
+import { PreparednessCard } from '@/components/preparedness-card';
 import { Screen } from '@/components/screen';
 import { ThemedText } from '@/components/themed-text';
 import type { RiskLevel } from '@/constants/health-data';
@@ -231,6 +246,21 @@ export default function EnvironmentScreen() {
           )}
         </>
       )}
+
+      {/*
+        Outside the `environment === null` guard on purpose, so this is the one part of the screen
+        that is never blank. The guidance is most needed when the towers are down — during the
+        flood, not before it — and gating fixed reference text behind a successful fetch would
+        remove it exactly then. It is also why the section sits last: everything above is a live
+        measurement and takes precedence when there is one.
+      */}
+      <ThemedText type="smallBold">{PREPAREDNESS_HEADING}</ThemedText>
+      <ThemedText type="small" themeColor="textSecondary">
+        {PREPAREDNESS_INTRO}
+      </ThemedText>
+      {PREPAREDNESS_ADVISORIES.map((advisory) => (
+        <PreparednessCard key={advisory.id} advisory={advisory} />
+      ))}
     </Screen>
   );
 }

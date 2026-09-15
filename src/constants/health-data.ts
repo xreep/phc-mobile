@@ -98,7 +98,14 @@ export type TrendSeries = {
   points: number[];
 };
 
-/** 24hr / 7-day vitals history (PRD §7.2.4 Trends). */
+/**
+ * Fixed 24hr / 7-day example series for the Trends screen (PRD §7.2.4 Trends).
+ *
+ * Not a recorded history: PRD §7.2.1 ingestion has not landed, so no vitals are written to disk
+ * anywhere in this build. These are demo curves showing what the screen will look like once
+ * there is a buffer to draw. `app/trends.tsx` says so on screen — see the banner there for why
+ * that disclosure is load-bearing rather than decorative.
+ */
 export const TRENDS: Record<TrendRange, TrendSeries[]> = {
   '24h': [
     {

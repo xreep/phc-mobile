@@ -25,11 +25,37 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Why this banner is not optional.
+ *
+ * The series below come from the `TRENDS` constant in `health-data.ts` — fixed example curves,
+ * not a recorded history. PRD §7.2.1 vitals ingestion has not landed, so there is no buffer to
+ * read from and nothing is written to disk: the only AsyncStorage keys this app owns are the
+ * settings blob and the last-known-good weather reading. The previous subtitle ("Vitals history
+ * from on-device storage") therefore asserted a persistence layer that does not exist. The
+ * Community screen already states this principle for its placeholder cohort; the same disclosure
+ * belongs here, because a chart that looks like real history is exactly the thing a viewer will
+ * assume is real history unless told otherwise.
+ */
+function SampleDataBanner() {
+  return (
+    <Card>
+      <ThemedText type="smallBold">Example data — not a recorded history</ThemedText>
+      <ThemedText type="small" themeColor="textSecondary">
+        These curves are fixed sample series to show how trends will look. This build does not yet
+        record or store your vitals over time, so nothing here reflects your own readings.
+      </ThemedText>
+    </Card>
+  );
+}
+
 export default function TrendsScreen() {
   const [range, setRange] = useState<TrendRange>('24h');
 
   return (
-    <Screen title="Trends" subtitle="Vitals history from on-device storage">
+    <Screen title="Trends" subtitle="Example series · concept demo">
+      <SampleDataBanner />
+
       <ThemedView type="backgroundElement" style={styles.segment}>
         {RANGES.map((r) => {
           const active = r.key === range;

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pressable, StyleSheet } from 'react-native';
 
 import { RiskCard } from '@/components/risk-card';
@@ -9,6 +10,7 @@ import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
 import { useRiskAssessment } from '@/hooks/use-risk-assessment';
 import { useSos } from '@/hooks/use-sos';
+import { useRiskColors } from '@/hooks/use-theme';
 import type { SensorSource } from '@/risk';
 import { formatAge } from '@/utils/format';
 
@@ -17,7 +19,16 @@ function sourceLabel(source: SensorSource): string {
 }
 
 export default function HomeScreen() {
-  const { assessment, latest, baselines } = useRiskAssessment();
+  // Dev-only demo control (rendered only under `__DEV__`, below). Arming it hands the risk
+  // engine a window with a real impact-then-stillness sequence spliced into the tail — it does
+  // not touch the SOS state directly. The fall is then detected by `rules/fall.ts` exactly as a
+  // hardware accelerometer's would be, which is the whole point: the demo proves the detector,
+  // not the card. Clearing it returns the window to normal, so the flow can be re-run after a
+  // cancel or a send.
+  const [simulateFall, setSimulateFall] = useState(false);
+  const risk = useRiskColors();
+
+  const { assessment, latest, baselines } = useRiskAssessment({ simulateFall });
 
   // The engine reports critical triggers and never acts; this is the one place that hands
   // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all
@@ -59,6 +70,34 @@ export default function HomeScreen() {
       </Pressable>
 
       <SosAlert controller={sos} />
+
+      {/* Development builds only — `__DEV__` is false in a release bundle, so this control is
+          absent from the APK's UI entirely. It exists so a fall can be *demonstrated*: see the
+          comment on `simulateFall` above for why it injects a sensor reading rather than setting
+          the card. */}
+      {__DEV__ ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ selected: simulateFall }}
+          onPress={() => setSimulateFall((armed) => !armed)}
+          style={({ pressed }) => [
+            styles.devTool,
+            {
+              borderColor: simulateFall ? risk.red.fg : risk.neutral.fg,
+              backgroundColor: simulateFall ? risk.red.bg : 'transparent',
+            },
+            pressed && styles.pressed,
+          ]}>
+          <ThemedText type="smallBold" style={{ color: simulateFall ? risk.red.fg : risk.neutral.fg }}>
+            {simulateFall ? 'Clear simulated fall' : 'Dev · Simulate a fall'}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.devToolHint}>
+            {simulateFall
+              ? 'A 3.1 g impact followed by stillness is in the sensor window. The Fall Detection card and the SOS countdown above are the risk engine’s own response to it.'
+              : 'Splices a real impact-then-stillness sequence into the sensor window so the fall rule fires and SOS escalates. Not present in release builds.'}
+          </ThemedText>
+        </Pressable>
+      ) : null}
     </Screen>
   );
 }
@@ -86,5 +125,19 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.8,
+  },
+  /** Dashed outline so the control reads as instrumentation rather than a product affordance. */
+  devTool: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderRadius: Spacing.three,
+    padding: Spacing.three,
+    gap: Spacing.one,
+    marginTop: Spacing.two,
+  },
+  devToolHint: {
+    // Wraps under the label rather than beside it, so the explanation stays readable at the
+    // narrow widths this sits at.
+    flexShrink: 1,
   },
 });

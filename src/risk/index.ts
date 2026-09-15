@@ -58,6 +58,13 @@ export {
 } from './config';
 
 export {
+  environmentalContextFor,
+  ENV_CONTEXT_DISCLAIMER,
+  ENV_CONTEXT_LABEL,
+  type EnvironmentalContext,
+} from './env-context';
+
+export {
   celsiusToFahrenheit,
   computeHeatIndexC,
   computeHeatIndexF,

@@ -59,12 +59,24 @@ export type DashboardRisk = {
   readonly baselines: VitalBaselines;
 };
 
-export function useRiskAssessment(): DashboardRisk {
+export type UseRiskAssessmentOptions = {
+  /**
+   * Dev-only: hand the engine a window with a fall spliced into its tail (PRD §7.2.2).
+   *
+   * The flag shapes the engine's *input* and nothing else — see `MockReadingOptions` for why
+   * the demo trigger has to work that way to be worth anything. This hook stays a pure
+   * `readings → assessment` mapping either way.
+   */
+  readonly simulateFall?: boolean;
+};
+
+export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): DashboardRisk {
   const { environment } = useEnvironmentFeed();
   const now = useNow(RE_EVALUATE_INTERVAL_MS);
+  const simulateFall = options.simulateFall === true;
 
   return useMemo(() => {
-    const readings = buildMockReadings(now);
+    const readings = buildMockReadings(now, { simulateFall });
     const assessment = assessRisk({
       readings,
       environment: buildEnvironmentSnapshot(environment),
@@ -75,5 +87,5 @@ export function useRiskAssessment(): DashboardRisk {
       latest: readings.at(-1) ?? null,
       baselines: computeVitalBaselines({ readings, assessment }),
     };
-  }, [environment, now]);
+  }, [environment, now, simulateFall]);
 }

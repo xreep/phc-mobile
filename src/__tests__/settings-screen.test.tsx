@@ -299,16 +299,24 @@ describe('data sharing', () => {
     );
   });
 
-  it('says what turning SOS off actually stops', async () => {
+  it('says what turning SOS off actually stops, and what SOS itself sends', async () => {
     const screen = await renderSettings();
 
+    // The sentence used to read "No raw health data leaves your device", directly under the SOS
+    // toggle. That was false: `composeSosMessage` puts the user's name, HR, SpO2, skin
+    // temperature, heat index and GPS coordinates into the outgoing body, and `sos-flow.test.tsx`
+    // asserts all of it going over the relay. A privacy claim sitting beside the one control that
+    // contradicts it is the worst place for one to be wrong, so the copy now names the exception.
     await waitFor(() =>
       expect(
         screen.getByText(
-          'All sharing is off by default except emergency SOS. No raw health data leaves your device. Turning off emergency SOS stops the app alerting your contacts at all, including automatically.',
+          'All sharing is off by default except emergency SOS, which is the one path that sends anything off this device: an SOS carries your name, your latest vitals, and your coordinates to the contacts you have added, through your SMS app or your configured relay. Nothing else is uploaded anywhere. Turning off emergency SOS stops the app alerting your contacts at all, including automatically.',
         ),
       ).toBeTruthy(),
     );
+
+    // And the retired claim is gone rather than merely moved.
+    expect(screen.queryByText(/No raw health data leaves your device/)).toBeNull();
   });
 });
 
