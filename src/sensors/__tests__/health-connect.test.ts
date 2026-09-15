@@ -8,10 +8,24 @@
  * and a delta on its own is not a temperature.
  */
 
+import { Platform } from 'react-native';
 import {
+  getGrantedPermissions,
+  getSdkStatus,
+  initialize,
+  readRecords,
+  requestPermission,
+} from 'react-native-health-connect';
+
+import {
+  checkHealthConnect,
+  grantedVitalsPermissions,
   mapHeartRate,
   mapOxygenSaturation,
   mapSkinTemperature,
+  readVitals,
+  requestVitalsAccess,
+  VITALS_PERMISSIONS,
 } from '@/sensors/health-connect';
 
 const T = '2026-09-15T10:00:00.000Z';
@@ -94,23 +108,6 @@ describe('mapSkinTemperature', () => {
     ).toEqual([]);
   });
 });
-
-import { Platform } from 'react-native';
-import {
-  getGrantedPermissions,
-  getSdkStatus,
-  initialize,
-  readRecords,
-  requestPermission,
-} from 'react-native-health-connect';
-
-import {
-  checkHealthConnect,
-  grantedVitalsPermissions,
-  readVitals,
-  requestVitalsAccess,
-  VITALS_PERMISSIONS,
-} from '@/sensors/health-connect';
 
 const sdkStatus = jest.mocked(getSdkStatus);
 const init = jest.mocked(initialize);
