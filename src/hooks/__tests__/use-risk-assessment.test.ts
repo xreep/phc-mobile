@@ -161,6 +161,33 @@ describe('useRiskAssessment source selection', () => {
     });
   });
 
+  it('evaluates at the poll instant when the feed polled after the last clock tick', async () => {
+    // `useNow` ticks on its own 60 s timer; the feed stamps its motion reading at its own
+    // `Date.now()`. A poll landing after the tick (first poll, AppState catch-up, refresh)
+    // would otherwise be `timestamp > now` and dropped by `withinWindow` until the next tick —
+    // doubling fall-detection latency.
+    feed.mockReturnValue({
+      ...feed(),
+      readings: [liveReading(-30_000, 76), liveAt(10_000, { motionSummary: STILL })],
+      lastPolledAt: NOW + 10_000,
+    });
+    const { result } = await renderHook(() => useRiskAssessment());
+    expect(result.current.assessment.evaluatedAt).toBe(NOW + 10_000);
+    expect(result.current.assessment.sampleCount).toBe(2);
+  });
+
+  it('evaluates at the clock tick when the feed has not polled', async () => {
+    feed.mockReturnValue({ ...feed(), readings: [], lastPolledAt: null });
+    const { result } = await renderHook(() => useRiskAssessment());
+    expect(result.current.assessment.evaluatedAt).toBe(NOW);
+  });
+
+  it('never evaluates earlier than the clock tick because of an older poll', async () => {
+    feed.mockReturnValue({ ...feed(), lastPolledAt: NOW - 45_000 });
+    const { result } = await renderHook(() => useRiskAssessment());
+    expect(result.current.assessment.evaluatedAt).toBe(NOW);
+  });
+
   it('splices the simulated fall onto the live buffer under simulateFall', async () => {
     const { result } = await renderHook(() => useRiskAssessment({ simulateFall: true }));
     expect(result.current.live).toBe(true);

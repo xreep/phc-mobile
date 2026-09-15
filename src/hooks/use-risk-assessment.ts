@@ -23,6 +23,15 @@
  * already implements actually fire. The tick itself lives in `useNow`, which the Environment
  * screen needs for the same reason — a frozen clock there freezes the "updated N ago" line.
  *
+ * ## Why the live feed's poll instant also moves the clock
+ * `withinWindow` drops any reading with `timestamp > now`. The tick and the feed are
+ * independent clocks: the feed stamps its motion reading at its own `Date.now()`, and a poll
+ * that lands after the last tick — the first poll after the async SDK checks, every AppState
+ * catch-up, `refresh` — would be in the engine's future and excluded until the next tick,
+ * doubling fall-detection latency to ~120 s. So the memo evaluates at
+ * `max(now, feed.lastPolledAt)`: never earlier than the tick, never earlier than the newest
+ * poll. On the simulated path `lastPolledAt` is null and nothing changes.
+ *
  * The environment arrives asynchronously and may be null on the first render; the engine
  * takes null and reports `dataQuality: 'missing'` for heat rather than guessing.
  */
@@ -99,21 +108,25 @@ export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): Dashb
   const simulateFall = options.simulateFall === true;
   const live = settings.sensorSource === 'health_connect';
   const liveReadings = feed.readings;
+  const lastPolledAt = feed.lastPolledAt;
 
   return useMemo(() => {
+    // Never behind the newest poll, or its readings would sit in the engine's future (above).
+    const evaluatedAt = Math.max(now, lastPolledAt ?? now);
+
     // The one place the app decides which buffer is real. `live` is read from Settings, not
     // from the feed's status, so a feed that is switched on but empty scores as "no data"
     // rather than quietly showing the simulated window under a Health Connect label.
     const readings = live
       ? simulateFall
-        ? spliceSimulatedFall(liveReadings, now)
+        ? spliceSimulatedFall(liveReadings, evaluatedAt)
         : liveReadings
-      : buildMockReadings(now, { simulateFall });
+      : buildMockReadings(evaluatedAt, { simulateFall });
 
     const assessment = assessRisk({
       readings,
       environment: buildEnvironmentSnapshot(environment),
-      now,
+      now: evaluatedAt,
     });
     return {
       assessment,
@@ -126,5 +139,15 @@ export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): Dashb
       feedFailure: feed.failure,
       requestAccess: feed.requestAccess,
     };
-  }, [environment, feed.failure, feed.requestAccess, feed.status, live, liveReadings, now, simulateFall]);
+  }, [
+    environment,
+    feed.failure,
+    feed.requestAccess,
+    feed.status,
+    lastPolledAt,
+    live,
+    liveReadings,
+    now,
+    simulateFall,
+  ]);
 }
