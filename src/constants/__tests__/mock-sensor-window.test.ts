@@ -27,6 +27,7 @@ import {
   buildEnvironmentSnapshot,
   buildMockReadings,
   MOCK_WINDOW,
+  spliceSimulatedFall,
 } from '@/constants/mock-sensor-window';
 import { FIXTURE_OBSERVATION_AGE_MS, liveEnvironment } from '@/environment/__tests__/fixtures';
 import { assessRisk, computeVitalBaselines, DEFAULT_RISK_THRESHOLDS as T } from '@/risk';
@@ -521,5 +522,58 @@ describe('the personal baselines the vitals row shows for this window', () => {
     expect(vital.meaningful).toBe(true);
     expect(vital.short).toBe('+16%');
     expect(vital.summary).toBe('Heart rate is 16% above your 10-minute average.');
+  });
+});
+
+describe('spliceSimulatedFall (live mode)', () => {
+  const NOW = 1_766_000_000_000;
+  const MINUTE = 60_000;
+
+  /** A quiet live buffer: HR every 30 s and a still motion reading at each past poll. */
+  function liveReadings(): SensorReading[] {
+    const out: SensorReading[] = [];
+    for (let offset = -20 * MINUTE; offset <= 0; offset += 30_000) {
+      out.push({ source: 'health_connect', timestamp: NOW + offset, hr: 74 });
+      if (offset % MINUTE === 0) {
+        out.push({
+          source: 'health_connect',
+          timestamp: NOW + offset,
+          motionSummary: MOCK_WINDOW.still,
+        });
+      }
+    }
+    return out;
+  }
+
+  it('leaves a quiet live buffer green with no SOS candidate', () => {
+    const assessment = assessRisk({ readings: liveReadings(), now: NOW });
+    expect(assessment.byCategory.fall.level).toBe('green');
+    expect(assessment.sosCandidate).toBe(false);
+  });
+
+  it('turns the same live buffer into a confirmed, ongoing fall the engine escalates', () => {
+    const readings = spliceSimulatedFall(liveReadings(), NOW);
+    const assessment = assessRisk({ readings, now: NOW });
+
+    expect(assessment.byCategory.fall.rule).toBe('fall.impactThenStillness');
+    expect(assessment.byCategory.fall.criticalRules).toContain('fall.impactThenStillness');
+    expect(assessment.sosCandidate).toBe(true);
+  });
+
+  it('keeps every live vital and only replaces motion inside the spliced span', () => {
+    const live = liveReadings();
+    const spliced = spliceSimulatedFall(live, NOW);
+    const hrCount = (rs: readonly SensorReading[]) => rs.filter((r) => r.hr !== undefined).length;
+    expect(hrCount(spliced)).toBe(hrCount(live));
+    // Newest reading is the spliced still sample, so the trailing-still run is measurable.
+    const newest = spliced[spliced.length - 1];
+    expect(newest.timestamp).toBe(NOW);
+    expect(newest.motionSummary).toEqual(MOCK_WINDOW.still);
+  });
+
+  it('is a no-op shape-wise on an empty buffer: three motion readings, nothing else', () => {
+    const spliced = spliceSimulatedFall([], NOW);
+    expect(spliced.map((r) => r.timestamp - NOW)).toEqual([-2 * MINUTE, -MINUTE, 0]);
+    expect(spliced[0].motionSummary).toEqual(MOCK_WINDOW.fallImpact);
   });
 });

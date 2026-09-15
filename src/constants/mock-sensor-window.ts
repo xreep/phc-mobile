@@ -234,6 +234,52 @@ export function buildEnvironmentSnapshot(
   return environment === null ? null : toEnvironmentSnapshot(environment);
 }
 
+/**
+ * Live-mode counterpart of {@link FALL_MOTION}, for the same dev-only Dashboard control when
+ * the buffer comes from Health Connect rather than from this file.
+ *
+ * Splices impact → still → still at `now − 2·INTERVAL`, `now − INTERVAL`, `now`, and strips
+ * any live motion inside that span so a real "walking" summary cannot break the still run.
+ * Every live *vital* is kept untouched — the point is to prove the detector on real data.
+ *
+ * The tail lands at exactly `now`, not `now − LATEST_AGE_MS` as the mock does, because
+ * `rules/fall.ts` measures the ongoing stillness from the *newest* reading and the live buffer
+ * has HR samples right up to the poll instant; a still sample any older would be outranked by
+ * a motion-less HR reading and the escalation to SOS would not fire.
+ */
+export function spliceSimulatedFall(
+  readings: readonly SensorReading[],
+  now: number,
+): SensorReading[] {
+  const tail: SensorReading[] = [FALL_IMPACT, STILL, STILL].map((motionSummary, index) => ({
+    source: 'simulated' as const,
+    timestamp: now - (2 - index) * INTERVAL_MS,
+    motionSummary,
+  }));
+  const spanStart = tail[0].timestamp;
+
+  const kept: SensorReading[] = [];
+  for (const reading of readings) {
+    if (reading.timestamp < spanStart || reading.motionSummary === undefined) {
+      kept.push(reading);
+      continue;
+    }
+    // Inside the span: keep the vitals, drop the motion. A motion-only reading has nothing left.
+    const vitals: SensorReading = { source: reading.source, timestamp: reading.timestamp };
+    const stripped = {
+      ...vitals,
+      ...(reading.hr !== undefined ? { hr: reading.hr } : {}),
+      ...(reading.spo2 !== undefined ? { spo2: reading.spo2 } : {}),
+      ...(reading.skinTempC !== undefined ? { skinTempC: reading.skinTempC } : {}),
+    };
+    if (reading.hr !== undefined || reading.spo2 !== undefined || reading.skinTempC !== undefined) {
+      kept.push(stripped);
+    }
+  }
+
+  return [...kept, ...tail].sort((a, b) => a.timestamp - b.timestamp);
+}
+
 /** Exported for the tests that pin the demo's intended output. */
 export const MOCK_WINDOW = {
   intervalMs: INTERVAL_MS,
