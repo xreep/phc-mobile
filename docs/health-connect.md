@@ -28,8 +28,12 @@ into a per-minute `MotionSummary` for the fall and stillness rules.
 ## Cadence and buffer
 
 Polled every 60 s (`POLL_INTERVAL_MS`), catching up on foreground if the app was backgrounded
-longer than that. The buffer keeps `longestLookbackMs + 2 min`, derived from the engine's
-thresholds, so every extended-lookback rule sees a full window.
+longer than that. Every poll re-reads the whole retention window (`now − BUFFER_RETAIN_MS → now`)
+rather than only what is new since the last poll: companion apps sync in batches minutes after
+measurement, keeping the original sample timestamps, and a delta read would never see those
+late-written samples. The ring buffer deduplicates the overlap. The buffer keeps
+`longestLookbackMs + 2 min`, derived from the engine's thresholds, so every extended-lookback
+rule sees a full window.
 
 ## Demoing a fall on live data
 

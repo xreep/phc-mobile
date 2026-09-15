@@ -7,8 +7,11 @@
  *    call at all — a stray `getSdkStatus` on a phone without Health Connect is a crash.
  * 2. **Which paths may prompt.** Only `requestAccess` calls `requestVitalsAccess`. The
  *    interval and the foreground catch-up never do.
- * 3. **The warm-up range.** The first poll reads back the engine's full lookback so the
- *    extended rules see history immediately; later polls read from the last poll.
+ * 3. **The read range.** Every poll — the warm-up and each later one — reads back the full
+ *    retention window, never `(lastPolledAt, now]`. Companion apps (Fitbit, Samsung Health,
+ *    Garmin…) write to Health Connect minutes after measurement with the *original* sample
+ *    timestamps, so a delta range would never see a sample measured at T+3 and written at
+ *    T+15. The ring buffer's dedupe absorbs the overlap.
  * 4. **Foreground catch-up at its boundary.** `>=` pinned on both sides.
  * 5. **Nothing after unmount.** A poll that resolves after the provider is gone must not touch
  *    state.
@@ -234,7 +237,9 @@ describe('polling', () => {
     expect(result.current.readings).toEqual([hrAt(NOW - 30_000, 72)]);
   });
 
-  it('polls every interval from the previous poll instant and never prompts', async () => {
+  it('polls the full retention window every interval and never prompts', async () => {
+    // Not `(lastPolledAt, now]`: a band that syncs in batches writes samples stamped minutes
+    // before the write, and a delta range would miss every one of them after the warm-up.
     await renderHook(() => useSensors({ enabled: true }));
     await settle();
     read.mockClear();
@@ -243,7 +248,7 @@ describe('polling', () => {
 
     expect(read).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledWith({
-      sinceMs: NOW,
+      sinceMs: NOW + POLL_INTERVAL_MS - BUFFER_RETAIN_MS,
       untilMs: NOW + POLL_INTERVAL_MS,
       granted: ['HeartRate', 'OxygenSaturation', 'SkinTemperature'],
     });
@@ -261,7 +266,7 @@ describe('polling', () => {
     expect(result.current.status).toBe('error');
     expect(result.current.failure).toEqual({ kind: 'read', message: 'Health Connect busy' });
     expect(result.current.readings.some((r) => r.hr === 72)).toBe(true);
-    // The failed range is not marked as polled, so the next tick re-reads it.
+    // A failed poll does not count as one: `lastPolledAt` stays at the last success.
     expect(result.current.lastPolledAt).toBe(NOW);
   });
 

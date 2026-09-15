@@ -20,6 +20,15 @@
  * whose captured generation no longer matches simply returns — the same "a newer request
  * supersedes an older one" rule the environment hook expresses with `abort()`.
  *
+ * ## Every poll reads the full retention window, not a delta
+ * Companion apps (Fitbit, Samsung Health, Garmin…) write to Health Connect minutes after
+ * measurement, stamped with the *original* sample time. A sample measured at T+3 min and
+ * written at T+15 is never inside a later `[lastPolledAt, now)` range, so a delta poll would
+ * find data only on the warm-up read. Reading `now − BUFFER_RETAIN_MS → now` every time costs
+ * nothing (the ~20-min window is far inside one `readRecords` page) and `mergeReadings`'
+ * dedupe absorbs the overlap. `lastPolledAt` is kept for the AppState catch-up and the feed's
+ * own freshness, never to bound a read.
+ *
  * ## The motion reading is stamped at the poll instant and appended last
  * `rules/fall.ts` reads the trailing still run from the *newest* reading. Health Connect
  * samples are all `≤ now` (the read range ends at `now`), so a motion reading at exactly
@@ -100,7 +109,7 @@ export function useSensors({ enabled }: UseSensorsOptions): SensorFeed {
     polling.current = gen;
 
     const now = Date.now();
-    const since = Math.max(lastPolledRef.current ?? Number.NEGATIVE_INFINITY, now - BUFFER_RETAIN_MS);
+    const since = now - BUFFER_RETAIN_MS;
 
     // Flushed before the await so the summary spans exactly this interval, and emitted even if
     // the vitals read fails — a flaky band must not blind fall detection.

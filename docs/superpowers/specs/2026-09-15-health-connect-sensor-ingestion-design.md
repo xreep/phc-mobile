@@ -49,7 +49,7 @@ src/hooks/use-sensors.ts
   - `HeartRate`: one reading per `samples[i]` → `{ source: 'health_connect', timestamp: Date.parse(time), hr: beatsPerMinute }`.
   - `OxygenSaturation`: one reading per record → `{ …, spo2: percentage }`.
   - `SkinTemperature`: with `baseline`, one reading per delta → `{ …, skinTempC: baseline.inCelsius + delta.inCelsius }`; without, none.
-- First poll reads `now − longestLookbackMs`; later polls read `lastPolledAt → now`.
+- Every poll (warm-up and later) reads `now − BUFFER_RETAIN_MS → now`; the ring buffer dedupes the overlap. (Amended from "later polls read `lastPolledAt → now`": companion apps write batch-synced samples minutes late with their original timestamps, which a delta range never sees.)
 - Pure mappers `mapHeartRate`, `mapOxygenSaturation`, `mapSkinTemperature` are exported for tests.
 
 ### motion.ts

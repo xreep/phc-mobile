@@ -163,7 +163,9 @@ export type ReadVitalsOptions = {
 };
 
 /**
- * Every granted vital in `(sinceMs, untilMs]`, as readings, ascending.
+ * Every granted vital in `[sinceMs, untilMs)`, as readings, ascending. Health Connect's
+ * `between` filter is start-inclusive, end-exclusive. The hook asks for the same trailing
+ * window on every poll, so consecutive reads overlap heavily by design; the ring buffer dedupes.
  *
  * Not paginated: `readRecords` pages by *record*, a record holds many samples, and the widest
  * range this is ever asked for is the engine's lookback (~20 min) — far inside a page.
