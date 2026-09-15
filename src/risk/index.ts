@@ -39,7 +39,7 @@
  * stretches of time.
  */
 
-export { assessRisk } from './assess';
+export { assessRisk, longestLookbackMs } from './assess';
 
 export {
   computeVitalBaselines,

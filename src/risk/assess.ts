@@ -18,6 +18,7 @@ import type {
   RiskAssessmentInput,
   RiskCategoryKey,
   RiskLevel,
+  RiskThresholds,
   RuleId,
 } from './types';
 import { SPEC_FLAG_RULES } from './types';
@@ -95,6 +96,24 @@ function resolveNow(input: RiskAssessmentInput, sorted: readonly { timestamp: nu
   return 0;
 }
 
+/**
+ * The furthest back any rule reads, for the ingestion layer's ring buffer.
+ *
+ * Exported because `RiskAssessmentInput.readings` documents that the buffer must span this
+ * bound, and a buffer that is trimmed to a hand-typed number will silently fall short the
+ * day a rule's window grows. `heatCriticalMs` carries `maxGapMs` of headroom for the
+ * half-open-window reason explained at the call site below.
+ */
+export function longestLookbackMs(thresholds: RiskThresholds): number {
+  return Math.max(
+    thresholds.window.ms,
+    thresholds.stillness.heatCriticalMs + thresholds.window.maxGapMs,
+    thresholds.fall.stillnessWindowMs,
+    thresholds.dehydration.windowMs,
+    thresholds.fatigue.windowMs,
+  );
+}
+
 export function assessRisk(input: RiskAssessmentInput): RiskAssessment {
   const thresholds = resolveRiskThresholds(input.thresholds);
   const sorted = sortByTimestamp(input.readings ?? []);
@@ -112,14 +131,7 @@ export function assessRisk(input: RiskAssessmentInput): RiskAssessment {
   // carry that headroom inside themselves (`resolveRiskThresholds` enforces it), so they
   // enter this max as-is; each rule then slices its own window out of `extendedReadings`
   // rather than reading the whole buffer.
-  const longestLookbackMs = Math.max(
-    thresholds.window.ms,
-    thresholds.stillness.heatCriticalMs + thresholds.window.maxGapMs,
-    thresholds.fall.stillnessWindowMs,
-    thresholds.dehydration.windowMs,
-    thresholds.fatigue.windowMs,
-  );
-  const extendedReadings = withinWindow(sorted, now, longestLookbackMs);
+  const extendedReadings = withinWindow(sorted, now, longestLookbackMs(thresholds));
   const readings = withinWindow(sorted, now, thresholds.window.ms);
 
   const environment = input.environment ?? null;

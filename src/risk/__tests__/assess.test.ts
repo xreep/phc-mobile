@@ -17,7 +17,7 @@
  * not fire, since the spec uses strict inequalities) and one step past it (which must).
  */
 
-import { assessRisk } from '../assess';
+import { assessRisk, longestLookbackMs } from '../assess';
 import { DEFAULT_RISK_THRESHOLDS } from '../config';
 import { fahrenheitToCelsius } from '../heat-index';
 import type { EnvironmentSnapshot, RiskAssessment, SensorReading } from '../types';
@@ -948,6 +948,25 @@ describe('no rule can report a flag and a level that disagree', () => {
       return !result.flaggedRules.every((rule) => fired.has(rule));
     }).map(({ label }) => label);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('longestLookbackMs', () => {
+  it('is the largest of every rule lookback, with the stillness gap headroom included', () => {
+    const t = DEFAULT_RISK_THRESHOLDS;
+    const expected = Math.max(
+      t.window.ms,
+      t.stillness.heatCriticalMs + t.window.maxGapMs,
+      t.fall.stillnessWindowMs,
+      t.dehydration.windowMs,
+      t.fatigue.windowMs,
+    );
+    expect(longestLookbackMs(t)).toBe(expected);
+    // Every consumer of the buffer relies on this being at least every individual bound.
+    expect(longestLookbackMs(t)).toBeGreaterThanOrEqual(t.fatigue.windowMs);
+    expect(longestLookbackMs(t)).toBeGreaterThanOrEqual(
+      t.stillness.heatCriticalMs + t.window.maxGapMs,
+    );
   });
 });
 
