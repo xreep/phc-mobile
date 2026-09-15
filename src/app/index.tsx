@@ -33,6 +33,7 @@ export default function HomeScreen() {
     assessment,
     latest,
     latestVitals,
+    vitalReadingCount,
     baselines,
     live,
     feedStatus,
@@ -67,7 +68,7 @@ export default function HomeScreen() {
         live={live}
         status={feedStatus}
         failure={feedFailure}
-        readingCount={assessment.sampleCount}
+        vitalReadingCount={vitalReadingCount}
         onRequestAccess={requestAccess}
       />
 

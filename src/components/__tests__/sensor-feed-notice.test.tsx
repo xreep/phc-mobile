@@ -12,15 +12,17 @@ import { noticeFor, SensorFeedNotice } from '@/components/sensor-feed-notice';
 
 describe('noticeFor', () => {
   it('is silent on the simulated source whatever the feed says', () => {
-    expect(noticeFor({ live: false, status: 'error', failure: null, readingCount: 0 })).toBeNull();
+    expect(noticeFor({ live: false, status: 'error', failure: null, vitalReadingCount: 0 })).toBeNull();
   });
 
   it('is silent once live readings exist', () => {
-    expect(noticeFor({ live: true, status: 'live', failure: null, readingCount: 3 })).toBeNull();
+    expect(noticeFor({ live: true, status: 'live', failure: null, vitalReadingCount: 3 })).toBeNull();
   });
 
-  it('says it is waiting when live but empty', () => {
-    const notice = noticeFor({ live: true, status: 'live', failure: null, readingCount: 0 });
+  it('says it is waiting when live but no reading carries a vital', () => {
+    // The count is of *vital* readings: the phone's own motion summaries arrive from the first
+    // poll even when the band has never synced, and must not silence the one notice that says so.
+    const notice = noticeFor({ live: true, status: 'live', failure: null, vitalReadingCount: 0 });
     expect(notice?.title).toMatch(/waiting/i);
     expect(notice?.actionable).toBe(false);
   });
@@ -30,7 +32,7 @@ describe('noticeFor', () => {
       live: true,
       status: 'permission-required',
       failure: null,
-      readingCount: 0,
+      vitalReadingCount: 0,
     });
     expect(notice?.actionable).toBe(true);
     expect(notice?.hint).toMatch(/heart rate/i);
@@ -39,10 +41,10 @@ describe('noticeFor', () => {
   it('surfaces the failure message for unavailable and error', () => {
     const failure = { kind: 'sdk' as const, message: 'Health Connect is not available on this device.' };
     expect(
-      noticeFor({ live: true, status: 'unavailable', failure, readingCount: 0 })?.hint,
+      noticeFor({ live: true, status: 'unavailable', failure, vitalReadingCount: 0 })?.hint,
     ).toBe(failure.message);
     expect(
-      noticeFor({ live: true, status: 'error', failure: { kind: 'read', message: 'busy' }, readingCount: 2 })
+      noticeFor({ live: true, status: 'error', failure: { kind: 'read', message: 'busy' }, vitalReadingCount: 2 })
         ?.hint,
     ).toBe('busy');
   });
@@ -51,7 +53,7 @@ describe('noticeFor', () => {
 describe('SensorFeedNotice', () => {
   it('renders nothing when there is no notice', async () => {
     const screen = await render(
-      <SensorFeedNotice live={false} status="idle" failure={null} readingCount={0} onRequestAccess={jest.fn()} />,
+      <SensorFeedNotice live={false} status="idle" failure={null} vitalReadingCount={0} onRequestAccess={jest.fn()} />,
     );
     expect(screen.toJSON()).toBeNull();
   });
@@ -63,7 +65,7 @@ describe('SensorFeedNotice', () => {
         live
         status="permission-required"
         failure={null}
-        readingCount={0}
+        vitalReadingCount={0}
         onRequestAccess={onRequestAccess}
       />,
     );
@@ -73,7 +75,7 @@ describe('SensorFeedNotice', () => {
 
   it('is not a button while waiting', async () => {
     const screen = await render(
-      <SensorFeedNotice live status="live" failure={null} readingCount={0} onRequestAccess={jest.fn()} />,
+      <SensorFeedNotice live status="live" failure={null} vitalReadingCount={0} onRequestAccess={jest.fn()} />,
     );
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.getByText(/waiting/i)).toBeTruthy();

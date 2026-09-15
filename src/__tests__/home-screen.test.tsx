@@ -366,6 +366,29 @@ describe('Health Connect selected', () => {
     expect(input?.latest?.skinTempC).toBeUndefined();
   });
 
+  it('says it is waiting for Health Connect when only the phone’s own motion has arrived', async () => {
+    // Permissions granted, accelerometer working, band not synced: the buffer holds one
+    // motion-only reading after the first poll, so `assessment.sampleCount` is already 1. The
+    // notice has to count *vital* readings or this — the one state it exists to explain — is
+    // the one state in which it never shows.
+    jest.mocked(checkHealthConnect).mockResolvedValue('available');
+    jest.mocked(grantedVitalsPermissions).mockResolvedValue(['HeartRate']);
+    jest.mocked(readVitals).mockResolvedValue([]);
+    jest.mocked(isMotionAvailable).mockResolvedValue(true);
+    jest.mocked(startMotionFold).mockReturnValue({
+      flush: () => STILL,
+      stop: () => {},
+    } as unknown as MotionFold);
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    expect(await screen.findByText('Waiting for Health Connect')).toBeTruthy();
+    // The motion reading did arrive — this is not the empty-buffer case.
+    expect(screen.getByText('Updated 0s ago · Android Health Connect')).toBeTruthy();
+    expect(screen.queryByText(/Simulated data/)).toBeNull();
+  });
+
   it('explains an unavailable Health Connect', async () => {
     jest.mocked(checkHealthConnect).mockResolvedValue('unavailable');
     mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));

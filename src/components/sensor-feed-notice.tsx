@@ -24,10 +24,14 @@ export type NoticeInput = {
   readonly live: boolean;
   readonly status: SensorFeedStatus;
   readonly failure: SensorFailure | null;
-  readonly readingCount: number;
+  /**
+   * Readings that carry a vital — not the engine's `sampleCount`, which includes the phone's
+   * own motion summaries and so is ≥ 1 from the first poll whether or not the band has synced.
+   */
+  readonly vitalReadingCount: number;
 };
 
-export function noticeFor({ live, status, failure, readingCount }: NoticeInput): FeedNotice | null {
+export function noticeFor({ live, status, failure, vitalReadingCount }: NoticeInput): FeedNotice | null {
   if (!live) return null;
   switch (status) {
     case 'idle':
@@ -56,7 +60,7 @@ export function noticeFor({ live, status, failure, readingCount }: NoticeInput):
         actionable: false,
       };
     case 'live':
-      return readingCount === 0
+      return vitalReadingCount === 0
         ? {
             title: 'Waiting for Health Connect',
             hint: 'No readings in the last few minutes. Make sure your band or watch has synced.',

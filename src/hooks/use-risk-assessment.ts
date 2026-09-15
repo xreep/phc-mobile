@@ -43,7 +43,7 @@ import {
   type SensorReading,
   type VitalBaselines,
 } from '@/risk';
-import { latestVitalsOf } from '@/sensors/latest-vitals';
+import { carriesVital, latestVitalsOf } from '@/sensors/latest-vitals';
 import { useSensorFeed } from '@/sensors/provider';
 import type { SensorFailure, SensorFeedStatus } from '@/sensors/types';
 import { useSettings } from '@/settings/provider';
@@ -65,6 +65,12 @@ export type DashboardRisk = {
    * reading carries any.
    */
   readonly latestVitals: SensorReading | null;
+  /**
+   * How many readings carry at least one vital. `assessment.sampleCount` counts the phone's
+   * motion-only readings too, so it is ≥ 1 from the first poll even when the band has never
+   * synced — this is the number that says whether Health Connect has delivered anything.
+   */
+  readonly vitalReadingCount: number;
   /** Each vital against its rolling average over the same window (PRD §7.2.1 extension). */
   readonly baselines: VitalBaselines;
   /** True when the readings came from Health Connect rather than the simulated window. */
@@ -113,6 +119,7 @@ export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): Dashb
       assessment,
       latest: readings.at(-1) ?? null,
       latestVitals: latestVitalsOf(readings),
+      vitalReadingCount: readings.filter(carriesVital).length,
       baselines: computeVitalBaselines({ readings, assessment }),
       live,
       feedStatus: feed.status,

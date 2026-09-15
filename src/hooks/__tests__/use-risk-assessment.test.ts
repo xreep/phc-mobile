@@ -122,11 +122,28 @@ describe('useRiskAssessment source selection', () => {
     expect(result.current.latestVitals?.timestamp).toBe(NOW - 30_000);
   });
 
-  it('reports no latestVitals when only motion has arrived', async () => {
+  it('reports no latestVitals and a zero vital count when only motion has arrived', async () => {
     feed.mockReturnValue({ ...feed(), readings: [liveAt(0, { motionSummary: STILL })] });
     const { result } = await renderHook(() => useRiskAssessment());
     expect(result.current.latest).not.toBeNull();
     expect(result.current.latestVitals).toBeNull();
+    // `assessment.sampleCount` is 1 here; the Dashboard's "waiting" notice keys off this.
+    expect(result.current.assessment.sampleCount).toBe(1);
+    expect(result.current.vitalReadingCount).toBe(0);
+  });
+
+  it('counts only readings that carry at least one vital', async () => {
+    feed.mockReturnValue({
+      ...feed(),
+      readings: [
+        liveAt(-90_000, { hr: 70, spo2: 98 }),
+        liveAt(-60_000, { motionSummary: STILL }),
+        liveAt(-30_000, { skinTempC: 36.5 }),
+        liveAt(0, { motionSummary: STILL }),
+      ],
+    });
+    const { result } = await renderHook(() => useRiskAssessment());
+    expect(result.current.vitalReadingCount).toBe(2);
   });
 
   it('agrees latest and latestVitals on the simulated window, whose every reading carries all vitals', async () => {

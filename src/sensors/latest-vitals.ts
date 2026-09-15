@@ -17,6 +17,11 @@ import type { SensorReading } from '@/risk';
 const VITAL_FIELDS = ['hr', 'spo2', 'skinTempC'] as const;
 type VitalField = (typeof VITAL_FIELDS)[number];
 
+/** True when the reading carries at least one vital — i.e. it came from the band, not the phone. */
+export function carriesVital(reading: SensorReading): boolean {
+  return VITAL_FIELDS.some((field) => reading[field] !== undefined);
+}
+
 /**
  * A reading holding the newest `hr`, `spo2`, and `skinTempC` in `readings`, each chosen
  * independently; `timestamp`/`source` are the newest contributing reading's. Null when no
