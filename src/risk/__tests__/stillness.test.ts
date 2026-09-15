@@ -14,8 +14,8 @@
 
 import { DEFAULT_RISK_THRESHOLDS } from '../config';
 import type { MotionSummary, SensorReading } from '../types';
-import { isStillInterval, motionEstimate } from '../window';
-import { at, reading } from './fixtures';
+import { isStillInterval, longestStillRunMs, motionEstimate, trailingStillRunMs } from '../window';
+import { activeMotion, at, MINUTE, reading, stillMotion } from './fixtures';
 
 const { fall, plausible } = DEFAULT_RISK_THRESHOLDS;
 
@@ -118,5 +118,79 @@ describe('unobserved motion is distinguishable from stillness', () => {
     // `sampleCount: 0` as stillness would let a dead sensor confirm falls.
     const empty: MotionSummary = { peakG: 1, minG: 1, rmsG: 1, sampleCount: 0 };
     expect(motionEstimate(reading({ at: at(0), motionSummary: empty }), plausible.motionG)).toBeNull();
+  });
+});
+
+describe('still runs ignore readings that carry no motion', () => {
+  const options = {
+    restBandG: fall.restBandG,
+    stillnessPeakG: fall.stillnessPeakG,
+    motionRange: plausible.motionG,
+    maxGapMs: DEFAULT_RISK_THRESHOLDS.window.maxGapMs,
+  };
+
+  /** Motion once a minute, a heart-rate sample thirty seconds after each — the live shape. */
+  function interleaved(minutes: number, motionAt: (minute: number) => MotionSummary): SensorReading[] {
+    const out: SensorReading[] = [];
+    for (let m = 0; m <= minutes; m += 1) {
+      out.push(reading({ at: at(m * MINUTE), motionSummary: motionAt(m) }));
+      if (m < minutes) out.push(reading({ at: at(m * MINUTE + 30_000), hr: 74 }));
+    }
+    return out;
+  }
+
+  it('longestStillRunMs spans interleaved vitals as if they were not there', () => {
+    const readings = interleaved(5, () => stillMotion());
+    expect(longestStillRunMs(readings, options)).toBe(5 * MINUTE);
+  });
+
+  it('trailingStillRunMs spans interleaved vitals as if they were not there', () => {
+    const readings = interleaved(5, () => stillMotion());
+    expect(trailingStillRunMs(readings, options)).toBe(5 * MINUTE);
+  });
+
+  it('a motion-less reading newer than the last motion reading does not zero the trailing run', () => {
+    const readings = [...interleaved(3, () => stillMotion()), reading({ at: at(3 * MINUTE + 20_000), hr: 75 })];
+    expect(trailingStillRunMs(readings, options)).toBe(3 * MINUTE);
+  });
+
+  it('a motion-less reading newer than a *moving* anchor does not rescue the trailing run', () => {
+    // The anchor is the newest motion-bearing reading, and it is moving: the trailing run is
+    // zero, and the HR sample after it must not be mistaken for a still reading that restarts
+    // one. Longest run is untouched — the three still minutes before the move still count.
+    const readings = [
+      ...interleaved(3, () => stillMotion()),
+      reading({ at: at(4 * MINUTE), motionSummary: activeMotion() }),
+      reading({ at: at(4 * MINUTE + 30_000), hr: 75 }),
+    ];
+    expect(trailingStillRunMs(readings, options)).toBe(0);
+    expect(longestStillRunMs(readings, options)).toBe(3 * MINUTE);
+  });
+
+  it('a moving reading still breaks both runs', () => {
+    const readings = interleaved(5, (m) => (m === 3 ? activeMotion() : stillMotion()));
+    // Longest run is the pre-break segment (m=0..2, 2 min). Trailing only sees the
+    // segment touching the newest reading — m=4..5, 1 min — since the active reading
+    // at m=3 hard-breaks the backward scan and the earlier segment is no longer "ongoing".
+    expect(longestStillRunMs(readings, options)).toBe(2 * MINUTE);
+    expect(trailingStillRunMs(readings, options)).toBe(1 * MINUTE);
+  });
+
+  it('an accelerometer dropout longer than maxGapMs still breaks the run — the safety case', () => {
+    // Motion at 0, 1, 2 min; nothing until 5 min (gap 3 min > maxGapMs 2 min); motion at 5, 6.
+    // Heart-rate samples continue throughout, and must not bridge the gap.
+    const readings: SensorReading[] = [];
+    for (const m of [0, 1, 2, 5, 6]) readings.push(reading({ at: at(m * MINUTE), motionSummary: stillMotion() }));
+    for (let m = 0; m < 6; m += 1) readings.push(reading({ at: at(m * MINUTE + 30_000), hr: 74 }));
+    readings.sort((a, b) => a.timestamp - b.timestamp);
+
+    expect(trailingStillRunMs(readings, options)).toBe(1 * MINUTE);
+    expect(longestStillRunMs(readings, options)).toBe(2 * MINUTE);
+  });
+
+  it('returns 0 when no reading carries motion', () => {
+    const readings = [reading({ at: at(0), hr: 70 }), reading({ at: at(MINUTE), hr: 71 })];
+    expect(longestStillRunMs(readings, options)).toBe(0);
+    expect(trailingStillRunMs(readings, options)).toBe(0);
   });
 });

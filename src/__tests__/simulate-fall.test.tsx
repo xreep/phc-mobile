@@ -42,6 +42,7 @@ import { liveEnvironment } from '@/environment/__tests__/fixtures';
 import { EnvironmentProvider } from '@/environment/provider';
 import { useSos, type UseSosOptions } from '@/hooks/use-sos';
 import { assessRisk, DEFAULT_RISK_THRESHOLDS, type SensorReading } from '@/risk';
+import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
 import { SETTINGS_KEY } from '@/settings/store';
 
@@ -175,7 +176,9 @@ function renderHome() {
     <SafeAreaProvider initialMetrics={INSETS}>
       <EnvironmentProvider>
         <SettingsProvider>
-          <HomeScreen />
+          <SensorProvider>
+            <HomeScreen />
+          </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>
     </SafeAreaProvider>,

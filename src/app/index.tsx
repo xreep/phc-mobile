@@ -3,6 +3,7 @@ import { Pressable, StyleSheet } from 'react-native';
 
 import { RiskCard } from '@/components/risk-card';
 import { Screen } from '@/components/screen';
+import { SensorFeedNotice } from '@/components/sensor-feed-notice';
 import { SosAlert } from '@/components/sos-alert';
 import { ThemedText } from '@/components/themed-text';
 import { VitalsCard } from '@/components/vitals-card';
@@ -28,12 +29,24 @@ export default function HomeScreen() {
   const [simulateFall, setSimulateFall] = useState(false);
   const risk = useRiskColors();
 
-  const { assessment, latest, baselines } = useRiskAssessment({ simulateFall });
+  const {
+    assessment,
+    latest,
+    latestVitals,
+    vitalReadingCount,
+    baselines,
+    live,
+    feedStatus,
+    feedFailure,
+    requestAccess,
+  } = useRiskAssessment({ simulateFall });
 
   // The engine reports critical triggers and never acts; this is the one place that hands
   // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all
   // live behind `useSos` — the screen only supplies the assessment and renders the overlay.
-  const sos = useSos({ assessment, latest });
+  // `latestVitals`, not `latest`: on the live feed the newest reading is the motion-only
+  // summary, and the message would otherwise go out without a vitals line.
+  const sos = useSos({ assessment, latest: latestVitals });
 
   // Freshness comes from the timestamp the engine actually evaluated, not from a
   // hand-written string, so the header cannot claim the cards are more current than they
@@ -48,6 +61,16 @@ export default function HomeScreen() {
       {/* Both props come from the same `useRiskAssessment` memo, so the numbers and the
           averages they are compared against describe one evaluation (PRD §7.2.1 ext). */}
       <VitalsCard latest={latest} baselines={baselines} />
+
+      {/* Only ever visible with Health Connect selected and nothing usable on screen — says
+          why, and offers the one fix a tap can make (PRD §7.2.4). */}
+      <SensorFeedNotice
+        live={live}
+        status={feedStatus}
+        failure={feedFailure}
+        vitalReadingCount={vitalReadingCount}
+        onRequestAccess={requestAccess}
+      />
 
       <ThemedText type="smallBold">Risk overview</ThemedText>
       {/* Levels, colours, guidance, and metrics all come from the Tier-1 rule engine

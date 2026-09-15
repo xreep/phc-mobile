@@ -5,6 +5,7 @@ import { useColorScheme } from 'react-native';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
 import { EnvironmentProvider } from '@/environment/provider';
+import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
 
 SplashScreen.preventAutoHideAsync();
@@ -20,8 +21,12 @@ export default function TabLayout() {
             Dashboard's SOS path reads it. Two copies would let a contact added in one be
             invisible to the other. */}
         <SettingsProvider>
-          <AnimatedSplashOverlay />
-          <AppTabs />
+          {/* Inside Settings because the picker there is what switches the feed on; the
+              Dashboard's risk engine and Settings then agree on which source is live. */}
+          <SensorProvider>
+            <AnimatedSplashOverlay />
+            <AppTabs />
+          </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>
     </ThemeProvider>

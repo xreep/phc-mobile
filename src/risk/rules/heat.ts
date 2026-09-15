@@ -234,8 +234,8 @@ export function assessHeat(context: RuleContext): RuleOutcome {
   /**
    * PRD §7.2.5: extreme heat index plus no motion for over ten minutes.
    *
-   * `>` not `>=`, matching the spec's "> 10 min". Anchored to the newest reading, so a
-   * stillness that has already ended cannot trigger it — the person got up.
+   * `>` not `>=`, matching the spec's "> 10 min". Anchored to the newest motion-bearing
+   * reading, so a stillness that has already ended cannot trigger it — the person got up.
    *
    * A phone left on a table also reads as stillness. That false positive is real and
    * inherent to phone-based inactivity detection; it is why this reports SOS

@@ -27,6 +27,7 @@
  * that override every row assertion here would pass against a hardcoded "In line".
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -35,7 +36,40 @@ import { buildMockReadings } from '@/constants/mock-sensor-window';
 import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
 import { liveEnvironment } from '@/environment/__tests__/fixtures';
 import { EnvironmentProvider } from '@/environment/provider';
+import { useSos } from '@/hooks/use-sos';
+import type { SensorReading } from '@/risk';
+import { checkHealthConnect, grantedVitalsPermissions, readVitals } from '@/sensors/health-connect';
+import { isMotionAvailable, startMotionFold, type MotionFold } from '@/sensors/motion';
+import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
+import { SETTINGS_KEY } from '@/settings/store';
+
+// Hoisted above the imports, same reasoning as the `@/environment` mock below: the Health
+// Connect availability/permission checks are swapped for the "Health Connect selected" suite,
+// while the rest of the module (mappers, `readVitals`) stays real.
+jest.mock('@/sensors/health-connect', () => ({
+  ...jest.requireActual('@/sensors/health-connect'),
+  checkHealthConnect: jest.fn(() => Promise.resolve('unavailable')),
+  grantedVitalsPermissions: jest.fn(() => Promise.resolve([])),
+  readVitals: jest.fn(() => Promise.resolve([])),
+}));
+
+// The phone accelerometer, for the same suite: a device with a working accelerometer but a
+// band that has not synced is the case the "Waiting for Health Connect" notice exists for.
+jest.mock('@/sensors/motion', () => ({
+  ...jest.requireActual('@/sensors/motion'),
+  isMotionAvailable: jest.fn(() => Promise.resolve(false)),
+  startMotionFold: jest.fn(),
+}));
+
+// The real hook, wrapped so the suite can see what the screen hands it. Nothing about the SOS
+// flow is stubbed — the wrapper is there to pin *which* reading carries the vitals line.
+jest.mock('@/hooks/use-sos', () => {
+  const actual = jest.requireActual<typeof import('@/hooks/use-sos')>('@/hooks/use-sos');
+  return { ...actual, useSos: jest.fn(actual.useSos) };
+});
+
+const actualUseSos = jest.requireActual<typeof import('@/hooks/use-sos')>('@/hooks/use-sos').useSos;
 
 // Hoisted above the imports, so the two entry points are already the mocked copies while the
 // real feed hook, provider, engine, and screen all stay in the path. This is the whole app
@@ -91,7 +125,9 @@ function renderHome() {
             Storage is the AsyncStorage jest mock, so every test in this file starts from the
             documented defaults: no contacts, SOS opt-in on. */}
         <SettingsProvider>
-          <HomeScreen />
+          <SensorProvider>
+            <HomeScreen />
+          </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>
     </SafeAreaProvider>,
@@ -261,5 +297,104 @@ describe('the heat card follows the fetched observation', () => {
     expect(
       getByText('Extreme heat danger — get indoors or into shade and cool down now.'),
     ).toBeTruthy();
+  });
+});
+
+describe('Health Connect selected', () => {
+  const STILL = { peakG: 1.02, minG: 0.98, rmsG: 1.0, sampleCount: 1500 };
+
+  beforeEach(async () => {
+    // Jest 29's `restoreAllMocks` (run by the suites above) also clears `jest.fn`
+    // implementations, so every default this suite relies on is restated here.
+    jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    jest.mocked(useSos).mockImplementation(actualUseSos);
+    jest.mocked(readVitals).mockResolvedValue([]);
+    jest.mocked(isMotionAvailable).mockResolvedValue(false);
+    jest.mocked(startMotionFold).mockReset();
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        contacts: [],
+        userName: '',
+        sharing: { sos: true, anon_aggregate: false, cloud_backup: false, family_share: false },
+        sensorSource: 'health_connect',
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await AsyncStorage.clear();
+  });
+
+  it('asks for access instead of showing simulated vitals when nothing is granted', async () => {
+    jest.mocked(checkHealthConnect).mockResolvedValue('available');
+    jest.mocked(grantedVitalsPermissions).mockResolvedValue([]);
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    expect(await screen.findByText('Health Connect access needed')).toBeTruthy();
+    expect(screen.queryByText(/Simulated data/)).toBeNull();
+  });
+
+  it('hands SOS the newest vitals even though the newest reading is motion-only', async () => {
+    // The live buffer's tail is the phone's motion summary stamped at the poll instant; the
+    // band's HR and SpO₂ are 30–45 s older and live in their own readings. The SOS message
+    // must quote those, not the empty vitals of the motion reading.
+    jest.mocked(checkHealthConnect).mockResolvedValue('available');
+    jest.mocked(grantedVitalsPermissions).mockResolvedValue(['HeartRate', 'OxygenSaturation']);
+    const vitals: SensorReading[] = [
+      { source: 'health_connect', timestamp: NOW - 45_000, spo2: 95 },
+      { source: 'health_connect', timestamp: NOW - 30_000, hr: 88 },
+    ];
+    jest.mocked(readVitals).mockResolvedValue(vitals);
+    jest.mocked(isMotionAvailable).mockResolvedValue(true);
+    jest.mocked(startMotionFold).mockReturnValue({
+      flush: () => STILL,
+      stop: () => {},
+    } as unknown as MotionFold);
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    // The subtitle is still painted from `latest`, the motion-only tail stamped at the poll.
+    expect(await screen.findByText('Updated 0s ago · Android Health Connect')).toBeTruthy();
+
+    const input = jest.mocked(useSos).mock.calls.at(-1)?.[0];
+    expect(input?.latest).toMatchObject({ hr: 88, spo2: 95 });
+    expect(input?.latest?.skinTempC).toBeUndefined();
+  });
+
+  it('says it is waiting for Health Connect when only the phone’s own motion has arrived', async () => {
+    // Permissions granted, accelerometer working, band not synced: the buffer holds one
+    // motion-only reading after the first poll, so `assessment.sampleCount` is already 1. The
+    // notice has to count *vital* readings or this — the one state it exists to explain — is
+    // the one state in which it never shows.
+    jest.mocked(checkHealthConnect).mockResolvedValue('available');
+    jest.mocked(grantedVitalsPermissions).mockResolvedValue(['HeartRate']);
+    jest.mocked(readVitals).mockResolvedValue([]);
+    jest.mocked(isMotionAvailable).mockResolvedValue(true);
+    jest.mocked(startMotionFold).mockReturnValue({
+      flush: () => STILL,
+      stop: () => {},
+    } as unknown as MotionFold);
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    expect(await screen.findByText('Waiting for Health Connect')).toBeTruthy();
+    // The motion reading did arrive — this is not the empty-buffer case.
+    expect(screen.getByText('Updated 0s ago · Android Health Connect')).toBeTruthy();
+    expect(screen.queryByText(/Simulated data/)).toBeNull();
+  });
+
+  it('explains an unavailable Health Connect', async () => {
+    jest.mocked(checkHealthConnect).mockResolvedValue('unavailable');
+    mockedFetch.mockResolvedValue(liveEnvironment({ location: 'Chennai', fetchedAt: NOW, tempC: 28 }));
+    mockedRead.mockResolvedValue(null);
+
+    const screen = await renderHome();
+    expect(await screen.findByText('Health Connect unavailable')).toBeTruthy();
   });
 });

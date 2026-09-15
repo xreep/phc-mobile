@@ -17,7 +17,7 @@
  * not fire, since the spec uses strict inequalities) and one step past it (which must).
  */
 
-import { assessRisk } from '../assess';
+import { assessRisk, longestLookbackMs } from '../assess';
 import { DEFAULT_RISK_THRESHOLDS } from '../config';
 import { fahrenheitToCelsius } from '../heat-index';
 import type { EnvironmentSnapshot, RiskAssessment, SensorReading } from '../types';
@@ -948,6 +948,50 @@ describe('no rule can report a flag and a level that disagree', () => {
       return !result.flaggedRules.every((rule) => fired.has(rule));
     }).map(({ label }) => label);
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('longestLookbackMs', () => {
+  it('is the largest of every rule lookback, with the stillness gap headroom included', () => {
+    const t = DEFAULT_RISK_THRESHOLDS;
+    const expected = Math.max(
+      t.window.ms,
+      t.stillness.heatCriticalMs + t.window.maxGapMs,
+      t.fall.stillnessWindowMs,
+      t.dehydration.windowMs,
+      t.fatigue.windowMs,
+    );
+    expect(longestLookbackMs(t)).toBe(expected);
+    // Every consumer of the buffer relies on this being at least every individual bound.
+    expect(longestLookbackMs(t)).toBeGreaterThanOrEqual(t.fatigue.windowMs);
+    expect(longestLookbackMs(t)).toBeGreaterThanOrEqual(
+      t.stillness.heatCriticalMs + t.window.maxGapMs,
+    );
+  });
+});
+
+describe('live-shaped buffers (vitals and motion as separate readings)', () => {
+  /** One motion reading per minute; an HR sample 30 s after each. Impact two minutes ago. */
+  function liveShaped(): SensorReading[] {
+    const out: SensorReading[] = [];
+    for (let m = -20; m <= 0; m += 1) {
+      out.push(
+        reading({
+          at: at(m * MINUTE),
+          source: 'health_connect',
+          motionSummary: m === -2 ? { peakG: 3.1, minG: 0.32, rmsG: 1.12, sampleCount: 1500 } : stillMotion(1500),
+        }),
+      );
+      if (m < 0) out.push(reading({ at: at(m * MINUTE + 30_000), source: 'health_connect', hr: 74 }));
+    }
+    return out;
+  }
+
+  it('confirms an impact followed by stillness and escalates it, despite interleaved vitals', () => {
+    const assessment = assessRisk({ readings: liveShaped(), now: at(0) });
+    expect(assessment.byCategory.fall.rule).toBe('fall.impactThenStillness');
+    expect(assessment.byCategory.fall.criticalRules).toContain('fall.impactThenStillness');
+    expect(assessment.sosCandidate).toBe(true);
   });
 });
 

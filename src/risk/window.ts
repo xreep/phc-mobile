@@ -409,12 +409,16 @@ export type StillnessOptions = {
 /**
  * Longest contiguous stillness, in ms, anywhere in `readings`.
  *
- * Readings with no motion data **break** the run. That is the conservative direction
- * here: counting unobserved intervals as still would let any post-impact reading that
- * happens to lack motion data confirm a fall, manufacturing emergencies out of sensor
- * dropouts. The cost is under-detecting falls during an accelerometer outage — but
- * during such an outage the impact could not have been detected either, so nothing is
- * actually lost.
+ * Readings with no motion data are **skipped**, not counted as still and not counted as
+ * moving. The live feed delivers heart-rate and SpO₂ samples as their own readings between
+ * the once-a-minute motion summaries, and treating those as "moving" made every still run
+ * zero on real hardware — the fall confirmation and PRD §7.2.5's ten-minute stillness were
+ * unsatisfiable by the shape of the input.
+ *
+ * The conservative direction is kept where it matters: `maxGapMs` is measured between
+ * consecutive *motion-bearing* readings, so an accelerometer dropout longer than that still
+ * breaks the run. Unobserved time is not qualifying time; a heart-rate sample simply is not
+ * an observation of motion either way.
  */
 export function longestStillRunMs(
   readings: readonly SensorReading[],
@@ -427,7 +431,8 @@ export function longestStillRunMs(
 
   for (const reading of readings) {
     const still = isStillInterval(reading, restBandG, stillnessPeakG, motionRange);
-    if (still !== true) {
+    if (still === null) continue;
+    if (!still) {
       runStart = null;
       continue;
     }
@@ -442,32 +447,44 @@ export function longestStillRunMs(
 }
 
 /**
- * Stillness run that is still ongoing at the newest reading, in ms — for PRD §7.2.5's
- * "no motion for > 10 min".
+ * Stillness run that is still ongoing at the newest *motion-bearing* reading, in ms — for
+ * PRD §7.2.5's "no motion for > 10 min".
  *
- * Anchored to the newest reading for the same reason as {@link trailingRun}: stillness
- * that ended is not stillness now. The span stops at the newest reading rather than
- * extending to `now`, since the time since the last reading is unobserved.
+ * Anchored to the newest motion reading for the same reason as {@link trailingRun}:
+ * stillness that ended is not stillness now. Readings without motion are skipped in both
+ * directions (see {@link longestStillRunMs}); the span stops at the newest motion reading
+ * rather than extending to `now` or to a later vitals sample, since the time after it is
+ * unobserved.
  */
 export function trailingStillRunMs(
   readings: readonly SensorReading[],
   options: StillnessOptions,
 ): number {
   const { restBandG, stillnessPeakG, motionRange, maxGapMs } = options;
-  if (readings.length === 0) return 0;
 
-  const newest = readings[readings.length - 1];
-  if (isStillInterval(newest, restBandG, stillnessPeakG, motionRange) !== true) return 0;
+  let newestIndex = readings.length - 1;
+  while (newestIndex >= 0) {
+    const still = isStillInterval(readings[newestIndex], restBandG, stillnessPeakG, motionRange);
+    if (still === true) break;
+    if (still === false) return 0;
+    newestIndex -= 1;
+  }
+  if (newestIndex < 0) return 0;
 
-  let index = readings.length - 1;
-  while (index > 0) {
-    const candidate = readings[index - 1];
-    if (isStillInterval(candidate, restBandG, stillnessPeakG, motionRange) !== true) break;
-    if (readings[index].timestamp - candidate.timestamp > maxGapMs) break;
-    index -= 1;
+  const newest = readings[newestIndex];
+  let runStartIndex = newestIndex;
+  let previousTimestamp = newest.timestamp;
+  for (let i = newestIndex - 1; i >= 0; i -= 1) {
+    const candidate = readings[i];
+    const still = isStillInterval(candidate, restBandG, stillnessPeakG, motionRange);
+    if (still === null) continue;
+    if (!still) break;
+    if (previousTimestamp - candidate.timestamp > maxGapMs) break;
+    runStartIndex = i;
+    previousTimestamp = candidate.timestamp;
   }
 
-  return newest.timestamp - readings[index].timestamp;
+  return newest.timestamp - readings[runStartIndex].timestamp;
 }
 
 /**
