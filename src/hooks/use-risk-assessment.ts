@@ -1,6 +1,7 @@
 /**
- * Runs the Tier-1 risk engine (PRD §7.2.2) for the Dashboard, over the simulated sensor
- * window and the **live** environment observation from PRD §7.2.3.
+ * Runs the Tier-1 risk engine (PRD §7.2.2) for the Dashboard, over either the live Health
+ * Connect buffer or the simulated sensor window, and the **live** environment observation from
+ * PRD §7.2.3.
  *
  * ## Why the evaluation instant has to advance
  * The engine never reads a clock — `now` is passed in, which is what makes it
@@ -28,7 +29,11 @@
 
 import { useMemo } from 'react';
 
-import { buildEnvironmentSnapshot, buildMockReadings } from '@/constants/mock-sensor-window';
+import {
+  buildEnvironmentSnapshot,
+  buildMockReadings,
+  spliceSimulatedFall,
+} from '@/constants/mock-sensor-window';
 import { useEnvironmentFeed } from '@/environment/provider';
 import { useNow } from '@/hooks/use-now';
 import {
@@ -38,45 +43,59 @@ import {
   type SensorReading,
   type VitalBaselines,
 } from '@/risk';
+import { useSensorFeed } from '@/sensors/provider';
+import type { SensorFailure, SensorFeedStatus } from '@/sensors/types';
+import { useSettings } from '@/settings/provider';
 
-/** Matches the simulated sensor cadence, so the window advances a sample per tick. */
+/** Matches the sensor poll cadence, so the window advances a sample per tick. */
 export const RE_EVALUATE_INTERVAL_MS = 60 * 1000;
 
 export type DashboardRisk = {
   readonly assessment: RiskAssessment;
   /**
-   * Newest reading in the evaluated window, or null when the buffer is empty. Nullable
-   * because a real ingestion buffer is empty at cold start, and the vitals row has to be
-   * able to say so rather than render a stale number.
+   * Newest reading in the evaluated window, or null when the buffer is empty — which a live
+   * buffer is at cold start, so the vitals row has to be able to say so.
    */
   readonly latest: SensorReading | null;
-  /**
-   * Each vital against its own rolling average over the same window (PRD §7.2.1 extension).
-   *
-   * Computed here rather than in the component so the Dashboard stays a renderer, and computed
-   * from `assessment` so the row and the cards are guaranteed to describe one window.
-   */
+  /** Each vital against its rolling average over the same window (PRD §7.2.1 extension). */
   readonly baselines: VitalBaselines;
+  /** True when the readings came from Health Connect rather than the simulated window. */
+  readonly live: boolean;
+  /** The feed's own state, so the Dashboard can say *why* a live buffer is empty. */
+  readonly feedStatus: SensorFeedStatus;
+  readonly feedFailure: SensorFailure | null;
+  /** Raises the Health Connect permission dialog. User-initiated only. */
+  readonly requestAccess: () => void;
 };
 
 export type UseRiskAssessmentOptions = {
   /**
-   * Dev-only: hand the engine a window with a fall spliced into its tail (PRD §7.2.2).
-   *
-   * The flag shapes the engine's *input* and nothing else — see `MockReadingOptions` for why
-   * the demo trigger has to work that way to be worth anything. This hook stays a pure
-   * `readings → assessment` mapping either way.
+   * Dev-only: splice a fall into the tail of whichever window is live (PRD §7.2.2). Shapes the
+   * engine's *input* and nothing else — see `MockReadingOptions` for why the demo trigger has
+   * to work that way to prove anything.
    */
   readonly simulateFall?: boolean;
 };
 
 export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): DashboardRisk {
   const { environment } = useEnvironmentFeed();
+  const feed = useSensorFeed();
+  const { settings } = useSettings();
   const now = useNow(RE_EVALUATE_INTERVAL_MS);
   const simulateFall = options.simulateFall === true;
+  const live = settings.sensorSource === 'health_connect';
+  const liveReadings = feed.readings;
 
   return useMemo(() => {
-    const readings = buildMockReadings(now, { simulateFall });
+    // The one place the app decides which buffer is real. `live` is read from Settings, not
+    // from the feed's status, so a feed that is switched on but empty scores as "no data"
+    // rather than quietly showing the simulated window under a Health Connect label.
+    const readings = live
+      ? simulateFall
+        ? spliceSimulatedFall(liveReadings, now)
+        : liveReadings
+      : buildMockReadings(now, { simulateFall });
+
     const assessment = assessRisk({
       readings,
       environment: buildEnvironmentSnapshot(environment),
@@ -86,6 +105,10 @@ export function useRiskAssessment(options: UseRiskAssessmentOptions = {}): Dashb
       assessment,
       latest: readings.at(-1) ?? null,
       baselines: computeVitalBaselines({ readings, assessment }),
+      live,
+      feedStatus: feed.status,
+      feedFailure: feed.failure,
+      requestAccess: feed.requestAccess,
     };
-  }, [environment, now, simulateFall]);
+  }, [environment, feed.failure, feed.requestAccess, feed.status, live, liveReadings, now, simulateFall]);
 }
