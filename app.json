@@ -21,7 +21,12 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.phcmobile"
+      "package": "com.anonymous.phcmobile",
+      "permissions": [
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_OXYGEN_SATURATION",
+        "android.permission.health.READ_SKIN_TEMPERATURE"
+      ]
     },
     "web": {
       "output": "static",
@@ -44,6 +49,15 @@
           "isIosBackgroundLocationEnabled": false,
           "isAndroidBackgroundLocationEnabled": false,
           "isAndroidForegroundServiceEnabled": false
+        }
+      ],
+      "react-native-health-connect",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
         }
       ]
     ],

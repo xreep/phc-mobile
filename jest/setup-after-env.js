@@ -17,3 +17,28 @@
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
+
+// Neither native module exists under Jest. The defaults below describe a device with no
+// Health Connect and no accelerometer, so a screen test that never touches sensors renders
+// exactly as it did before the feed existed. Suites that exercise the feed override these
+// per test with `jest.mocked(fn).mockResolvedValue(...)`.
+jest.mock('react-native-health-connect', () => ({
+  SdkAvailabilityStatus: {
+    SDK_UNAVAILABLE: 1,
+    SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED: 2,
+    SDK_AVAILABLE: 3,
+  },
+  getSdkStatus: jest.fn(() => Promise.resolve(1)),
+  initialize: jest.fn(() => Promise.resolve(false)),
+  getGrantedPermissions: jest.fn(() => Promise.resolve([])),
+  requestPermission: jest.fn(() => Promise.resolve([])),
+  readRecords: jest.fn(() => Promise.resolve({ records: [] })),
+}));
+
+jest.mock('expo-sensors', () => ({
+  Accelerometer: {
+    isAvailableAsync: jest.fn(() => Promise.resolve(false)),
+    setUpdateInterval: jest.fn(),
+    addListener: jest.fn(() => ({ remove: jest.fn() })),
+  },
+}));
