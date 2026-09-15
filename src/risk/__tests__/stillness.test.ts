@@ -154,6 +154,19 @@ describe('still runs ignore readings that carry no motion', () => {
     expect(trailingStillRunMs(readings, options)).toBe(3 * MINUTE);
   });
 
+  it('a motion-less reading newer than a *moving* anchor does not rescue the trailing run', () => {
+    // The anchor is the newest motion-bearing reading, and it is moving: the trailing run is
+    // zero, and the HR sample after it must not be mistaken for a still reading that restarts
+    // one. Longest run is untouched — the three still minutes before the move still count.
+    const readings = [
+      ...interleaved(3, () => stillMotion()),
+      reading({ at: at(4 * MINUTE), motionSummary: activeMotion() }),
+      reading({ at: at(4 * MINUTE + 30_000), hr: 75 }),
+    ];
+    expect(trailingStillRunMs(readings, options)).toBe(0);
+    expect(longestStillRunMs(readings, options)).toBe(3 * MINUTE);
+  });
+
   it('a moving reading still breaks both runs', () => {
     const readings = interleaved(5, (m) => (m === 3 ? activeMotion() : stillMotion()));
     // Longest run is the pre-break segment (m=0..2, 2 min). Trailing only sees the
