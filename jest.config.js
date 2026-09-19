@@ -27,6 +27,12 @@ module.exports = {
   // beside the tests that use them.
   testMatch: ['**/*.@(test|spec).@(ts|tsx|js|jsx)'],
 
+  // 15 s, not Jest's 5 s default. The first test in a screen suite renders the whole Dashboard
+  // (providers, engine, SOS flow) from a cold module cache, which takes ~8 s on a shared CI
+  // runner and timed out there once while passing locally. The budget is the fix; no
+  // assertion was weakened.
+  testTimeout: 15000,
+
   testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/'],
   // Generated native build output duplicates package.json files, which confuses
   // the module map.
