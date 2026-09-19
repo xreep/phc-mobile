@@ -1,56 +1,149 @@
-# Welcome to your Expo app 👋
+# Personal Health Companion (PHC)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Mobile app for Smart India Hackathon Problem Statement **26181** — an AI-powered Personal Health
+Companion for disaster resilience.
 
-## Get started
+## Problem
 
-1. Install dependencies
+India faces recurring public-health challenges during and after disasters — heat stress,
+dehydration, respiratory illness, cardiovascular complications, and delayed access to care, often
+worsened by heat waves, floods, cyclones, and air-pollution events. There is a need for a secure,
+privacy-preserving Personal Health Companion that monitors key vitals continuously, warns users
+before a physiological risk becomes an emergency, fuses that risk with local environmental
+conditions, and can reach an emergency contact even with poor connectivity — without raw health data
+leaving the user's phone.
 
-   ```bash
-   npm install
-   ```
+## Solution
 
-2. Start the app
+PHC reads vitals from whatever band or phone sensor a user already has (via Android Health Connect,
+plus the phone's own accelerometer), scores them with an on-device rule engine fused with live
+weather/AQI, and — on a critical event — starts a 30-second SOS countdown that texts emergency
+contacts with the user's vitals and location, entirely without a backend holding any of that data.
 
-   ```bash
-   npx expo start
-   ```
+## Architecture
 
-In the output, you'll find options to open the app in a
+See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the full data-flow diagram.
+In short: Health Connect and the accelerometer feed adapters into one `SensorReading` schema →
+a ring buffer → the pure rule engine (fused with an environment snapshot) → the Dashboard and, on a
+critical rule, the SOS state machine → Twilio relay or native SMS composer.
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo — not usable for this app: Health Connect is a native module, so it needs a development build (`npx expo run:android`)
+## Major features and validation status
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+Every status below uses the ladder: **Built / Unit tested / Integration tested / Device validated /
+Real-world validated / Mock-demo / Planned**. Full detail in
+[`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) and [`docs/BUILD_MATRIX.md`](docs/BUILD_MATRIX.md).
 
-## Get a fresh project
+| Feature | Status |
+| --- | --- |
+| Rule-based risk engine (heat, respiratory, cardiovascular, fall, dehydration, fatigue) | Built · Unit tested |
+| Environment context (weather + AQI, offline cache) | Built · Unit/integration tested · live weather seen on the August APK |
+| Health Connect ingestion (HR, SpO₂, skin temp) + accelerometer fold | Built · Unit tested against mocked native modules — **not device validated** |
+| Emergency SOS (Twilio relay + SMS composer fallback) | Built · Unit/integration tested — relay not deployed, **not device validated** |
+| Settings (contacts, sharing prefs, sensor source) | Built · Unit tested · plaintext AsyncStorage (not encrypted) |
+| Trends screen | Mock-demo — renders static constants, no persisted history yet |
+| Community ward summary | Mock-demo — real aggregation logic, hardcoded demo cohort |
+| Reading persistence, notifications, background sensing | Planned |
 
-When you're ready, run:
+**Nothing in this repository is device- or real-world-validated except UI rendering and live
+OpenWeatherMap weather, observed on an August development build against a simulated vitals window.**
+
+## AI approach
+
+Today, risk assessment is a deterministic, on-device rule engine — not a trained model. Every
+threshold is sourced to public guidance (NOAA heat index; WHO/AHA SpO₂ and HR bands, cited in
+`src/risk/config.ts`) and requires sustained evidence before escalating. The engine's outputs are
+shaped to fuse with a learned tier later; none has shipped. The planned next step is an explainable,
+on-device personal-baseline anomaly score (deviation from the user's own history), evaluated before
+any TFLite model — see [`ADR-002`](docs/decisions/ADR-002-rules-before-ml.md) for why. No accuracy,
+sensitivity, or false-positive figure is claimed anywhere in this repository; none has been measured.
+
+This app provides a **risk indication** and a **recommendation to seek help** — it does not
+diagnose any condition.
+
+## Privacy model
+
+All physiological analysis runs on the device; no vital reading (HR, SpO₂, skin temperature, motion)
+is ever transmitted or stored on a server. The only network calls are coarse-location weather/AQI
+requests and the SOS SMS itself (via a credential-holding relay the app never touches, or the native
+SMS composer). Settings and the weather cache are stored in plaintext AsyncStorage today — flagged as
+a known gap against the PRD's encrypted-storage goal. Full detail:
+[`docs/security/privacy-architecture.md`](docs/security/privacy-architecture.md).
+
+## Hardware
+
+Today: any HR/SpO₂/skin-temperature-capable band or watch that writes to Android Health Connect — no
+custom hardware required. Future (stretch): an ESP32-based BLE prototype, only if a teammate already
+has the board — see `docs/ROADMAP.md`.
+
+## Setup
+
+Requires Node 22 and an Android device or emulator with Health Connect (Health Connect is a native
+module, so **Expo Go cannot run this app**).
 
 ```bash
-npm run reset-project
+export PATH="/opt/homebrew/bin:$PATH"   # or however Node 22 is on your PATH
+npm ci
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Create `.env.local` (gitignored):
+```
+EXPO_PUBLIC_OPENWEATHER_API_KEY=your_key_here
+# optional — leave unset to use the native SMS composer fallback for SOS
+EXPO_PUBLIC_TWILIO_SOS_URL=https://your-relay/sos
+```
 
-### Other setup steps
+Build and run a development client:
+```bash
+npx expo prebuild --platform android
+eas build --profile development --platform android
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Testing
 
-## Learn more
+```bash
+npm test                          # 48 suites / 1084 tests
+npx tsc --noEmit                  # typecheck
+npx eslint src --max-warnings 0   # lint
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+All 1084 tests are unit/integration tests against mocked native modules (Jest + React Native
+Testing Library). See [`docs/testing/validation-levels.md`](docs/testing/validation-levels.md) for
+what each level of testing does and does not cover, and
+[`docs/validation/device-validation-plan.md`](docs/validation/device-validation-plan.md) for the
+protocol to reach device validation.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Demo
 
-## Join the community
+**Current capability:** a simulated vitals window (default, clearly labelled "Simulated data") scored
+by the real rule engine; live weather/AQI for the phone's city; a dev-only "Simulate a fall" control
+that drives the real fall detector on real motion data; an SOS countdown → cancel, or an SMS composer
+opens pre-filled (no relay deployed). Trends and Community screens are static/demo data. See
+[`docs/JUDGE_QA.md`](docs/JUDGE_QA.md) for the honest answer to "what's actually working" and every
+other likely judge question.
 
-Join our community of developers creating universal apps.
+## Limitations
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+No reading persistence, no notifications, no background sensing (the app detects nothing with the
+screen off), Health Connect ingestion has never run against a real device, the SOS relay is
+undeployed, and settings are stored unencrypted. Full list:
+[`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) → Known Risks.
+
+## Roadmap
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the milestone-by-milestone path from here to a
+pilot-ready build.
+
+## Docs index
+
+- [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — current state, remaining work
+- [`docs/BUILD_MATRIX.md`](docs/BUILD_MATRIX.md) — per-capability validation table
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M0–M12
+- [`docs/JUDGE_QA.md`](docs/JUDGE_QA.md) — honest answers to expected judge questions
+- [`CHANGELOG.md`](CHANGELOG.md) — release history
+- [`docs/architecture/overview.md`](docs/architecture/overview.md) — data flow, providers
+- [`docs/security/privacy-architecture.md`](docs/security/privacy-architecture.md) — permissions, data handling
+- [`docs/testing/validation-levels.md`](docs/testing/validation-levels.md) — testing ladder
+- [`docs/validation/device-validation-plan.md`](docs/validation/device-validation-plan.md) — device validation protocol
+- [`docs/decisions/`](docs/decisions/) — architecture decision records
+- [`docs/features/`](docs/features/) — per-feature docs (Health Connect, SOS relay)
+- [`docs/prototype-audit-2026-09-19.md`](docs/prototype-audit-2026-09-19.md) — the full audit this documentation tree implements
