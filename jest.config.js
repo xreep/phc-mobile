@@ -27,10 +27,18 @@ module.exports = {
   // beside the tests that use them.
   testMatch: ['**/*.@(test|spec).@(ts|tsx|js|jsx)'],
 
-  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/'],
+  // 15 s, not Jest's 5 s default. The first test in a screen suite renders the whole Dashboard
+  // (providers, engine, SOS flow) from a cold module cache, which takes ~8 s on a shared CI
+  // runner and timed out there once while passing locally. The budget is the fix; no
+  // assertion was weakened.
+  testTimeout: 15000,
+
+  // `.claude/worktrees/` holds agent worktrees — full checkouts with their own `src/` — which
+  // would otherwise be collected as duplicate suites.
+  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/', '/.claude/'],
   // Generated native build output duplicates package.json files, which confuses
   // the module map.
-  modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/'],
+  modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/', '<rootDir>/.claude/'],
 
   collectCoverageFrom: ['src/**/*.{ts,tsx}', '!src/**/*.d.ts'],
 };
