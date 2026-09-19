@@ -138,6 +138,9 @@ describe('readSettings — validating what a previous build left behind', () => 
       const settings = await readSettings();
       expect(settings.profile).toEqual(DEFAULT_PROFILE);
       expect(settings.userName).toBe('Asha');
+    }
+  });
+
   it('defaults alerts to enabled when a previous build never wrote the field', () => {
     // The field did not exist before this feature. An old blob missing it must not read as
     // "the user turned notifications off" — that was never a choice they made.
