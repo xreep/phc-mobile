@@ -1,6 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 
+import {
+  ensureAlertChannels,
+  getAlertPermission,
+  requestAlertPermission,
+  type AlertPermission,
+} from '@/alerts/notify';
 import { Card } from '@/components/card';
 import { ContactEditor } from '@/components/contact-editor';
 import { Screen } from '@/components/screen';
@@ -27,6 +33,7 @@ export default function SettingsScreen() {
     setSharing,
     setSensorSource,
     setProfile,
+    setAlertsEnabled,
   } = useSettings();
   const theme = useTheme();
   const risk = useRiskColors();
@@ -37,6 +44,32 @@ export default function SettingsScreen() {
   const [nameDraft, setNameDraft] = useState<string | null>(null);
 
   const relayConfigured = isTwilioConfigured();
+
+  // M3 alerts. Read on mount so a permission denied in an earlier session is visible before the
+  // user ever touches the toggle, not only after they flip it. `ensureAlertChannels` runs here
+  // too — cheap and idempotent — because it must complete before Android 13+ will even offer the
+  // permission prompt (`docs/features/notifications.md`), and this screen must not assume the
+  // Dashboard's own `useAlerts` has already run first.
+  const [alertPermission, setAlertPermission] = useState<AlertPermission>('undetermined');
+  useEffect(() => {
+    let cancelled = false;
+    void ensureAlertChannels();
+    void getAlertPermission().then((permission) => {
+      if (!cancelled) setAlertPermission(permission);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleAlertsToggle = (value: boolean) => {
+    setAlertsEnabled(value);
+    // User-initiated only — the prompt must never appear from an effect. Turning the toggle off
+    // never touches the OS permission; there is nothing to ask for.
+    if (value) {
+      void requestAlertPermission().then(setAlertPermission);
+    }
+  };
 
   return (
     <Screen title="Settings" subtitle="Emergency contacts, privacy & data sources">
@@ -232,6 +265,24 @@ export default function SettingsScreen() {
             </Pressable>
           );
         })}
+      </Card>
+
+      <ThemedText type="smallBold">Alerts</ThemedText>
+      <Card>
+        <SettingRow
+          title="Alert notifications"
+          description="Get a notification when a risk card rises to elevated or high, or a critical trigger appears. Foreground only for now — the app has to be open to notice a change.">
+          <Switch
+            value={settings.alerts.enabled}
+            onValueChange={handleAlertsToggle}
+            accessibilityLabel="Alert notifications"
+          />
+        </SettingRow>
+        {alertPermission === 'denied' ? (
+          <ThemedText type="small" style={{ color: risk.red.fg }}>
+            Notifications are blocked for this app — enable them in Android settings.
+          </ThemedText>
+        ) : null}
       </Card>
 
       {editing !== null ? (

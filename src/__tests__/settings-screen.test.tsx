@@ -16,9 +16,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { getAlertPermission, requestAlertPermission } from '@/alerts/notify';
 import SettingsScreen from '@/app/settings';
 import { SettingsProvider } from '@/settings/provider';
 import { readSettings, SETTINGS_KEY } from '@/settings/store';
+
+// `@/alerts/notify` talks to `expo-notifications`; the screen's own concern is only whether it
+// calls the right function at the right moment and reacts to what comes back, so the module is
+// mocked directly rather than driven through the (also-mocked) native module two layers down.
+jest.mock('@/alerts/notify', () => ({
+  ensureAlertChannels: jest.fn(() => Promise.resolve()),
+  getAlertPermission: jest.fn(() => Promise.resolve('undetermined')),
+  requestAlertPermission: jest.fn(() => Promise.resolve('undetermined')),
+}));
+
+const mockedGetAlertPermission = jest.mocked(getAlertPermission);
+const mockedRequestAlertPermission = jest.mocked(requestAlertPermission);
 
 const INSETS = {
   frame: { x: 0, y: 0, width: 390, height: 844 },
@@ -52,6 +65,8 @@ const originalRelay = process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
 beforeEach(async () => {
   await AsyncStorage.clear();
   delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+  mockedGetAlertPermission.mockReset().mockResolvedValue('undetermined');
+  mockedRequestAlertPermission.mockReset().mockResolvedValue('undetermined');
 });
 
 afterEach(() => {
@@ -423,6 +438,83 @@ describe('sensor source', () => {
     await waitFor(async () => {
       await expect(readSettings()).resolves.toMatchObject({ sensorSource: 'ble_esp32' });
     });
+  });
+});
+
+describe('alert notifications', () => {
+  it('is on by default', async () => {
+    const screen = await renderSettings();
+
+    await waitFor(() => expect(screen.getByLabelText('Alert notifications').props.value).toBe(true));
+  });
+
+  it('persists turning it off, without touching the OS permission', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByLabelText('Alert notifications')).toBeTruthy());
+
+    await fireEvent(screen.getByLabelText('Alert notifications'), 'valueChange', false);
+
+    await waitFor(async () => {
+      await expect(readSettings()).resolves.toMatchObject({ alerts: { enabled: false } });
+    });
+    expect(mockedRequestAlertPermission).not.toHaveBeenCalled();
+  });
+
+  it('requests the OS permission when turned on, user-initiated', async () => {
+    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ alerts: { enabled: false } }));
+    mockedRequestAlertPermission.mockResolvedValue('granted');
+
+    const screen = await renderSettings();
+    await waitFor(() =>
+      expect(screen.getByLabelText('Alert notifications').props.value).toBe(false),
+    );
+
+    await fireEvent(screen.getByLabelText('Alert notifications'), 'valueChange', true);
+
+    await waitFor(() => expect(mockedRequestAlertPermission).toHaveBeenCalledTimes(1));
+    await waitFor(async () => {
+      await expect(readSettings()).resolves.toMatchObject({ alerts: { enabled: true } });
+    });
+  });
+
+  it('says notifications are blocked when the OS permission comes back denied', async () => {
+    mockedRequestAlertPermission.mockResolvedValue('denied');
+
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByLabelText('Alert notifications')).toBeTruthy());
+
+    await fireEvent(screen.getByLabelText('Alert notifications'), 'valueChange', true);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'Notifications are blocked for this app — enable them in Android settings.',
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('shows the blocked notice on load too, from a permission already denied earlier', async () => {
+    mockedGetAlertPermission.mockResolvedValue('denied');
+
+    const screen = await renderSettings();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          'Notifications are blocked for this app — enable them in Android settings.',
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('does not show the blocked notice while permission is merely undetermined', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByLabelText('Alert notifications')).toBeTruthy());
+
+    expect(
+      screen.queryByText('Notifications are blocked for this app — enable them in Android settings.'),
+    ).toBeNull();
   });
 });
 

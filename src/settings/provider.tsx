@@ -56,6 +56,8 @@ export type SettingsStore = {
   /** Patch one or more "About you" fields. See `src/settings/profile.ts` — captured, not
    *  yet applied to risk output. */
   readonly setProfile: (patch: Partial<UserProfile>) => void;
+  /** M3 alerts: the Settings "Alert notifications" toggle. */
+  readonly setAlertsEnabled: (enabled: boolean) => void;
 };
 
 const SettingsContext = createContext<SettingsStore | null>(null);
@@ -117,6 +119,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings((prev) => setProfileIn(prev, patch));
   }, []);
 
+  const setAlertsEnabled = useCallback((enabled: boolean) => {
+    setSettings((prev) => ({ ...prev, alerts: { ...prev.alerts, enabled } }));
+  }, []);
+
   return (
     <SettingsContext.Provider
       value={{
@@ -129,6 +135,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         setSharing,
         setSensorSource,
         setProfile,
+        setAlertsEnabled,
       }}>
       {children}
     </SettingsContext.Provider>

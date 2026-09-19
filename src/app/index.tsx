@@ -9,10 +9,12 @@ import { ThemedText } from '@/components/themed-text';
 import { VitalsCard } from '@/components/vitals-card';
 import { SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
+import { useAlerts } from '@/hooks/use-alerts';
 import { useRiskAssessment } from '@/hooks/use-risk-assessment';
 import { useSos } from '@/hooks/use-sos';
 import { useRiskColors } from '@/hooks/use-theme';
 import type { SensorSource } from '@/risk';
+import { useSettings } from '@/settings/provider';
 import { formatAge } from '@/utils/format';
 
 function sourceLabel(source: SensorSource): string {
@@ -28,6 +30,7 @@ export default function HomeScreen() {
   // cancel or a send.
   const [simulateFall, setSimulateFall] = useState(false);
   const risk = useRiskColors();
+  const { settings } = useSettings();
 
   const {
     assessment,
@@ -40,6 +43,11 @@ export default function HomeScreen() {
     feedFailure,
     requestAccess,
   } = useRiskAssessment({ simulateFall });
+
+  // M3 alerts: local notifications on a risk-level rise or a new critical trigger. Never on the
+  // simulated window (`live`), and only with the Settings toggle on — see `useAlerts`'s own doc
+  // for why both gate *planning*, not only delivery.
+  useAlerts({ assessment, enabled: settings.alerts.enabled, live });
 
   // The engine reports critical triggers and never acts; this is the one place that hands
   // them to the module that does (PRD §7.2.5). The countdown, consent gate, and delivery all

@@ -67,6 +67,7 @@ beforeEach(() => {
     setSharing: jest.fn(),
     setSensorSource: jest.fn(),
     setProfile: jest.fn(),
+    setAlertsEnabled: jest.fn(),
   });
 });
 
