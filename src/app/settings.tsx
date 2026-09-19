@@ -9,6 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { DATA_SHARING_PREFS, SENSOR_SOURCES } from '@/constants/health-data';
 import { Spacing } from '@/constants/theme';
 import { useRiskColors, useTheme } from '@/hooks/use-theme';
+import { AGE_BANDS } from '@/settings/profile';
 import { useSettings } from '@/settings/provider';
 import { formatPhoneForDisplay, isTwilioConfigured, type EmergencyContact } from '@/sos';
 
@@ -16,8 +17,17 @@ import { formatPhoneForDisplay, isTwilioConfigured, type EmergencyContact } from
 type EditorTarget = EmergencyContact | 'new' | null;
 
 export default function SettingsScreen() {
-  const { settings, loaded, writeFailed, addContact, removeContact, setUserName, setSharing, setSensorSource } =
-    useSettings();
+  const {
+    settings,
+    loaded,
+    writeFailed,
+    addContact,
+    removeContact,
+    setUserName,
+    setSharing,
+    setSensorSource,
+    setProfile,
+  } = useSettings();
   const theme = useTheme();
   const risk = useRiskColors();
 
@@ -124,6 +134,58 @@ export default function SettingsScreen() {
           The SMS fallback works without mobile data, but it always needs you to press send —
           Android and iOS never let an app send a text on its own.
         </ThemedText>
+      </Card>
+
+      <ThemedText type="smallBold">About you</ThemedText>
+      <Card>
+        <ThemedText type="small" themeColor="textSecondary">
+          Used to tailor risk warnings on this phone. Never sent anywhere.
+        </ThemedText>
+        {AGE_BANDS.map((band) => {
+          const selected = band.key === settings.profile.ageBand;
+          return (
+            <Pressable
+              key={band.key}
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
+              onPress={() => setProfile({ ageBand: band.key })}>
+              <SettingRow title={band.label}>
+                <View
+                  style={[
+                    styles.radio,
+                    { borderColor: selected ? theme.text : theme.textSecondary },
+                  ]}>
+                  {selected ? (
+                    <View style={[styles.radioDot, { backgroundColor: theme.text }]} />
+                  ) : null}
+                </View>
+              </SettingRow>
+            </Pressable>
+          );
+        })}
+        <SettingRow
+          title="Long-term health condition"
+          description="e.g. asthma, heart condition, diabetes">
+          <Switch
+            value={settings.profile.chronicCondition}
+            onValueChange={(value) => setProfile({ chronicCondition: value })}
+            accessibilityLabel="Long-term health condition"
+          />
+        </SettingRow>
+        <SettingRow title="Works outdoors" description="e.g. farming, construction, delivery">
+          <Switch
+            value={settings.profile.outdoorWorker}
+            onValueChange={(value) => setProfile({ outdoorWorker: value })}
+            accessibilityLabel="Works outdoors"
+          />
+        </SettingRow>
+        <SettingRow title="Pregnant">
+          <Switch
+            value={settings.profile.pregnant}
+            onValueChange={(value) => setProfile({ pregnant: value })}
+            accessibilityLabel="Pregnant"
+          />
+        </SettingRow>
       </Card>
 
       <ThemedText type="smallBold">Data sharing</ThemedText>

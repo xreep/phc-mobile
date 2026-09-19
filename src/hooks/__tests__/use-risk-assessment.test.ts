@@ -66,6 +66,7 @@ beforeEach(() => {
     setUserName: jest.fn(),
     setSharing: jest.fn(),
     setSensorSource: jest.fn(),
+    setProfile: jest.fn(),
   });
 });
 
