@@ -1,6 +1,6 @@
 # Project status
 
-**Current Version:** 0.2.0 — see [`CHANGELOG.md`](../CHANGELOG.md). 0.3.0 pending merge of PRs
+**Current Version:** 0.2.0 — see [`CHANGELOG.md`](../CHANGELOG.md). 0.3.0 = current `master` after PRs #3–#11 (2026-09-19); not yet tagged
 (AQI respiratory advisory, local notifications, user profile capture).
 
 This document is a snapshot derived from [`docs/prototype-audit-2026-09-19.md`](prototype-audit-2026-09-19.md)
@@ -23,7 +23,7 @@ Genuinely built, unit- and/or integration-tested, on-device behaviour not yet co
 - **Settings persistence** (`src/settings/`) — contacts, name, sharing prefs, sensor source, in plaintext AsyncStorage. *Unit tested.*
 - **Preparedness advisories** (`src/advisories/`) — static flood/cyclone guidance, explicitly unattributed. *Unit tested.*
 
-## Implemented (in PR)
+## Implemented (merged 2026-09-19, not device validated)
 
 Built and tested on feature branches, not yet on `master` — each PR is open, reviewed, and not
 merged. None has run on a device.
@@ -31,17 +31,17 @@ merged. None has run on a device.
 - **AQI → respiratory risk advisory** (`src/risk/rules/respiratory.ts`, `src/risk/aqi-bands.ts`) —
   above EPA AQI 150 the respiratory card raises an advisory (level/score/guidance) without ever
   setting the PRD §7.2.2 respiratory flag or triggering SOS. Branch `feat/aqi-respiratory-advisory`.
-  *Built · Unit tested · Integration tested (Jest) · Device validated: NO · in review (PR open, not
+  *Built · Unit tested · Integration tested (Jest) · Device validated: NO · merged to master (not
   merged).* See [`docs/features/aqi-respiratory-advisory.md`](features/aqi-respiratory-advisory.md).
 - **Local risk-change notifications** (`src/alerts/`, `src/hooks/use-alerts.ts`) — foreground-only
   local notifications when a category rises to elevated/high or a critical trigger appears, reusing
   the same rule engine output as the Dashboard cards. Branch `feat/alert-notifications`.
-  *Built · Unit tested · Integration tested (Jest) · Device validated: NO · in review (PR open, not
+  *Built · Unit tested · Integration tested (Jest) · Device validated: NO · merged to master (not
   merged).* See [`docs/features/notifications.md`](features/notifications.md).
 - **User profile capture ("About you")** (`src/settings/profile.ts`) — age band, chronic condition,
   outdoor worker, pregnant status, captured in Settings; a proven no-op for the risk engine today
   (ADR-005 defers applying it to thresholds). Branch `feat/user-profile`.
-  *Built · Unit tested · Integration tested (Jest) · Device validated: NO · in review (PR open, not
+  *Built · Unit tested · Integration tested (Jest) · Device validated: NO · merged to master (not
   merged).* See [`docs/features/user-profile.md`](features/user-profile.md).
 
 ## Partially Implemented
@@ -72,8 +72,8 @@ Prioritised list, from the audit §D/§K:
 ### P0
 - Link EAS, build the development client, install on a phone — nothing in the sensing layer is validated without this. **BLOCKED on user action:** an Expo/EAS account (`eas login` / `eas init`).
 - Health Connect compatibility pass on Android 14 and 15 (permission sheet, `SkinTemperature` availability). **BLOCKED on user action:** a physical Android phone.
-- ~~Wire AQI into the respiratory rule (`envMultiplier` + an advisory rule at Unhealthy+).~~ — **Done, pending merge.** Implemented on `feat/aqi-respiratory-advisory` (PR open, reviewed, not merged); see [`docs/features/aqi-respiratory-advisory.md`](features/aqi-respiratory-advisory.md). Not device validated.
-- ~~Local notifications on risk-level change and on any critical rule.~~ — **Done, pending merge.** Implemented on `feat/alert-notifications` (PR open, reviewed, not merged); foreground-only; see [`docs/features/notifications.md`](features/notifications.md). Not device validated.
+- ~~Wire AQI into the respiratory rule (`envMultiplier` + an advisory rule at Unhealthy+).~~ — **Done — merged (PR #6).** see [`docs/features/aqi-respiratory-advisory.md`](features/aqi-respiratory-advisory.md). Not device validated.
+- ~~Local notifications on risk-level change and on any critical rule.~~ — **Done — merged (PR #8).** foreground-only; see [`docs/features/notifications.md`](features/notifications.md). Not device validated.
 - Deploy the Twilio relay; end-to-end SMS test to a second phone. **BLOCKED on user action:** a Twilio account (and relay deploy) plus a second physical phone.
 - Airplane-mode SOS composer-fallback test. **BLOCKED on user action:** a physical phone.
 - Push the parked CI workflow (`ci/github-actions` branch, commit `99761e2`). **BLOCKED on user action:** the GitHub PAT in use lacks the `workflow` scope needed to push a workflow file (or run `gh auth login` with that scope).
@@ -101,6 +101,13 @@ Prioritised list, from the audit §D/§K:
 ## Known Bugs
 
 None open. One item is **unverified, not a confirmed bug**: `readRecords('SkinTemperature')` may throw on a Health Connect version older than 1.1, which would make every poll report `error` until confirmed on a device.
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`, PR #4): `tsc --noEmit`, `eslint src --max-warnings 0`,
+`jest --ci` on every push and PR, plus an advisory `expo-doctor` job. First fully green run:
+PR #11 (2026-09-19) after aligning 18 Expo packages and RN 0.86.3 with SDK 57. Jest `testTimeout`
+is 15 s (PR #5) because the first cold Dashboard render exceeded 5 s on a shared runner once.
 
 ## Known Risks
 
@@ -135,7 +142,7 @@ domain-expert veto before merge — none of these has been reviewed by a health 
 Simulated vitals window (default source) with a real rule engine scoring it; live weather/AQI for the phone's city; a dev "Simulate a fall" button that drives the real fall detector; SOS countdown → cancel or SMS composer (no relay). Trends and Community are static. The Dashboard subtitle honestly reads "Simulated data" whenever the simulated window is the newest source.
 
 Three further features are built, unit- and integration-tested, and sitting in open, reviewed PRs
-(none merged, none device validated — see "Implemented (in PR)" above): an AQI-driven respiratory
+(merged to master 2026-09-19, none device validated — see "Implemented" above): an AQI-driven respiratory
 advisory, local risk-change notifications (foreground-only), and a user-profile capture screen (not
 yet wired to any risk threshold).
 

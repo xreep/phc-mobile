@@ -31,8 +31,7 @@ Android 14 and 15; grant/deny each permission; confirm whether `SkinTemperature`
 ### M3 — AQI wired into risk
 `EnvironmentSnapshot.aqi` feeds the respiratory rule's `envMultiplier` and an advisory rule at Unhealthy+. Gate: tests pin the EPA band boundaries; Environment and Dashboard agree.
 
-**Status: implemented, awaiting device validation.** Built on `feat/aqi-respiratory-advisory` (PR
-open, reviewed, not merged) — see `docs/features/aqi-respiratory-advisory.md`. The band-boundary
+**Status: implemented, awaiting device validation.** Merged to master in PR #6 (reviewed) — see `docs/features/aqi-respiratory-advisory.md`. The band-boundary
 gate is met by unit tests; the "Environment and Dashboard agree" gate is met for the EPA *label*
 only, not the *colour* (Environment: red at 151+; Dashboard card: amber at the same AQI), which is
 a pending product decision — see `docs/PROJECT_STATUS.md` "Decisions awaiting human sign-off".
@@ -40,8 +39,7 @@ a pending product decision — see `docs/PROJECT_STATUS.md` "Decisions awaiting 
 ### M4 — Local notifications
 `expo-notifications` fires on risk-level change (amber→red) and on any critical rule, debounced per category. Gate: verified on a locked phone.
 
-**Status: implemented, awaiting device validation.** Built on `feat/alert-notifications` (PR open,
-reviewed, not merged) — see `docs/features/notifications.md`. Foreground-only today; the "verified
+**Status: implemented, awaiting device validation.** Merged to master in PR #8 (reviewed) — see `docs/features/notifications.md`. Foreground-only today; the "verified
 on a locked phone" gate is unmet (no device validation yet).
 
 ### M5 — Twilio relay deployed
@@ -61,7 +59,7 @@ Age band, chronic-condition flag, outdoor-worker flag adjust thresholds and noti
 
 **Status: profile capture done; threshold personalisation pending sign-off.** The capture half
 (age band, chronic condition, outdoor worker, pregnant — Settings "About you") is built on
-`feat/user-profile` (PR open, reviewed, not merged) — see `docs/features/user-profile.md`. The
+PR #7 (merged to master) — see `docs/features/user-profile.md`. The
 regression gate above is already met by a dedicated test (a filled-in profile reproduces identical
 Dashboard output). The threshold/notification-urgency half of this milestone is explicitly deferred
 per ADR-005 pending a health-methodology review — see `docs/PROJECT_STATUS.md` "Decisions awaiting
