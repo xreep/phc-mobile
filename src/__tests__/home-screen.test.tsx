@@ -251,6 +251,63 @@ describe('Home dashboard', () => {
   });
 });
 
+describe('profile is a no-op for the risk engine', () => {
+  // Workstream D1 (PS §3d) adds a user profile — age band, chronic condition, outdoor worker,
+  // pregnant — captured in Settings for a *future* personalisation milestone
+  // (ADR-005). Nothing in `src/risk/` reads it yet, and this is the test that proves it: with
+  // every factor `vulnerabilityFactors` recognises turned on, the same fixtures used in the
+  // "Home dashboard" suite above must still produce byte-identical risk output. If a later
+  // change accidentally wires the profile into a threshold, this is the test that breaks.
+  beforeEach(async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(NOW);
+    mockedFetch.mockReset();
+    mockedRead.mockReset();
+    mockedRead.mockResolvedValue(null);
+    mockedFetch.mockResolvedValue(liveEnvironment());
+
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        contacts: [],
+        userName: '',
+        sharing: { sos: true, anon_aggregate: false, cloud_backup: false, family_share: false },
+        sensorSource: 'simulated',
+        profile: {
+          ageBand: '60plus',
+          chronicCondition: true,
+          outdoorWorker: true,
+          pregnant: true,
+        },
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    jest.restoreAllMocks();
+    await AsyncStorage.clear();
+  });
+
+  it('leaves every category, status, metric, and vitals reading unchanged', async () => {
+    const { getByText, getAllByText } = await renderHome();
+
+    // Same assertions as "Home dashboard"'s default-profile tests, re-run with a fully
+    // vulnerable profile seeded ahead of render. Any difference here would mean the profile
+    // reached the engine.
+    expect(getByText('Alert')).toBeTruthy(); // heat → red, exactly as with the default profile
+    expect(getAllByText('Normal')).toHaveLength(5);
+    expect(getByText('Heat index 56°C')).toBeTruthy();
+    expect(
+      getByText('Extreme heat danger — get indoors or into shade and cool down now.'),
+    ).toBeTruthy();
+    expect(getByText('78')).toBeTruthy();
+    expect(getByText('97')).toBeTruthy();
+    expect(getByText('36.8')).toBeTruthy();
+    expect(getAllByText('In line')).toHaveLength(3);
+    expect(getByText('In line with your 10-minute average.')).toBeTruthy();
+    expect(getByText('Updated 30s ago · Simulated data')).toBeTruthy();
+  });
+});
+
 describe('the heat card follows the fetched observation', () => {
   beforeEach(() => {
     jest.spyOn(Date, 'now').mockReturnValue(NOW);

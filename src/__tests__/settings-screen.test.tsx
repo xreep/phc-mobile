@@ -320,6 +320,99 @@ describe('data sharing', () => {
   });
 });
 
+describe('about you', () => {
+  it('says plainly why it is asking and that it never leaves the device', async () => {
+    const screen = await renderSettings();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Used to tailor risk warnings on this phone. Never sent anywhere.'),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('defaults every toggle off', async () => {
+    const screen = await renderSettings();
+
+    await waitFor(() => expect(screen.getByLabelText('Pregnant')).toBeTruthy());
+    expect(screen.getByLabelText('Long-term health condition').props.value).toBe(false);
+    expect(screen.getByLabelText('Works outdoors').props.value).toBe(false);
+    expect(screen.getByLabelText('Pregnant').props.value).toBe(false);
+  });
+
+  it('persists the selected age band', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('60 and over')).toBeTruthy());
+
+    await fireEvent.press(screen.getByText('60 and over'));
+
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.profile.ageBand).toBe('60plus');
+    });
+  });
+
+  it('switches the selection rather than allowing two bands at once', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('60 and over')).toBeTruthy());
+
+    await fireEvent.press(screen.getByText('60 and over'));
+    await fireEvent.press(screen.getByText('Under 18'));
+
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.profile.ageBand).toBe('under18');
+    });
+  });
+
+  it('persists a toggle', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByLabelText('Works outdoors')).toBeTruthy());
+
+    await fireEvent(screen.getByLabelText('Works outdoors'), 'valueChange', true);
+
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.profile.outdoorWorker).toBe(true);
+    });
+  });
+
+  it('toggles chronic condition and pregnant independently of each other and of the age band', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByLabelText('Pregnant')).toBeTruthy());
+
+    await fireEvent.press(screen.getByText('40–59'));
+    await fireEvent(screen.getByLabelText('Long-term health condition'), 'valueChange', true);
+    await fireEvent(screen.getByLabelText('Pregnant'), 'valueChange', true);
+
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.profile).toEqual({
+        ageBand: '40to59',
+        chronicCondition: true,
+        outdoorWorker: false,
+        pregnant: true,
+      });
+    });
+  });
+
+  it('shows a saved profile on a fresh mount', async () => {
+    const first = await renderSettings();
+    await waitFor(() => expect(first.getByText('60 and over')).toBeTruthy());
+    await fireEvent.press(first.getByText('60 and over'));
+    await fireEvent(first.getByLabelText('Pregnant'), 'valueChange', true);
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.profile).toMatchObject({ ageBand: '60plus', pregnant: true });
+    });
+    await first.unmount();
+
+    const second = await renderSettings();
+
+    await waitFor(() => expect(second.getByLabelText('Pregnant').props.value).toBe(true));
+  });
+});
+
 describe('sensor source', () => {
   it('persists the selection', async () => {
     const screen = await renderSettings();

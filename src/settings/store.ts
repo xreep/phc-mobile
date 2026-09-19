@@ -32,6 +32,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { DataSharingPref, SensorSourceOption } from '@/constants/health-data';
 import { DATA_SHARING_PREFS, DEFAULT_SENSOR_SOURCE, SENSOR_SOURCES } from '@/constants/health-data';
+import { DEFAULT_PROFILE, parseProfile, type UserProfile } from '@/settings/profile';
 import { normalizePhone } from '@/sos/phone';
 import type { EmergencyContact } from '@/sos/types';
 
@@ -48,6 +49,11 @@ export type PersistedSettings = {
   readonly userName: string;
   readonly sharing: SharingPrefs;
   readonly sensorSource: SensorSourceOption['key'];
+  /**
+   * Captured, not applied — see `src/settings/profile.ts`'s module header and
+   * ADR-005. Nothing downstream of this field currently changes behaviour based on it.
+   */
+  readonly profile: UserProfile;
 };
 
 const DEFAULT_SHARING: SharingPrefs = Object.freeze(
@@ -59,6 +65,7 @@ export const DEFAULT_SETTINGS: PersistedSettings = Object.freeze({
   userName: '',
   sharing: DEFAULT_SHARING,
   sensorSource: DEFAULT_SENSOR_SOURCE,
+  profile: DEFAULT_PROFILE,
 });
 
 const SHARING_KEYS = new Set<string>(DATA_SHARING_PREFS.map((pref) => pref.key));
@@ -126,6 +133,9 @@ function parseSettings(value: unknown): PersistedSettings {
       typeof source === 'string' && SOURCE_KEYS.has(source)
         ? (source as SensorSourceOption['key'])
         : DEFAULT_SENSOR_SOURCE,
+    // Missing on any blob written before this field existed; `parseProfile` already treats
+    // that the same as an explicit `undefined`, so no extra branch is needed here.
+    profile: parseProfile(record.profile),
   };
 }
 
@@ -206,6 +216,18 @@ export function setSharingPref(
   value: boolean,
 ): PersistedSettings {
   return { ...settings, sharing: { ...settings.sharing, [key]: value } };
+}
+
+/**
+ * Patch one or more profile fields, leaving the rest of the profile — and the rest of
+ * `settings` — untouched. A patch rather than a full replacement so the Settings screen's
+ * individual pickers/toggles can each call this with just the field they own.
+ */
+export function setProfile(
+  settings: PersistedSettings,
+  patch: Partial<UserProfile>,
+): PersistedSettings {
+  return { ...settings, profile: { ...settings.profile, ...patch } };
 }
 
 /**

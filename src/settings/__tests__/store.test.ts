@@ -17,12 +17,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { DATA_SHARING_PREFS } from '@/constants/health-data';
+import { DEFAULT_PROFILE } from '@/settings/profile';
 import {
   clearSettings,
   DEFAULT_SETTINGS,
   isSosEnabled,
   readSettings,
   removeContact,
+  setProfile,
   SETTINGS_KEY,
   setSharingPref,
   upsertContact,
@@ -72,6 +74,10 @@ describe('defaults', () => {
     expect(DEFAULT_SETTINGS.contacts).toEqual([]);
   });
 
+  it('start with the default (least-assuming) profile', () => {
+    expect(DEFAULT_SETTINGS.profile).toEqual(DEFAULT_PROFILE);
+  });
+
   it('enable the SOS opt-in and nothing else', () => {
     // PRD §7.2.4/§7.2.6: everything off by default except SOS. Derived from the pref list so
     // adding a pref that defaults on has to change the declaration, not just this expectation.
@@ -92,10 +98,40 @@ describe('readSettings — validating what a previous build left behind', () => 
       userName: 'Asha',
       sharing: { sos: true, anon_aggregate: true, cloud_backup: false, family_share: false },
       sensorSource: 'ble_esp32',
+      profile: { ageBand: '60plus', chronicCondition: true, outdoorWorker: false, pregnant: false },
     };
 
     expect(await writeSettings(settings)).toBe(true);
     await expect(readSettings()).resolves.toEqual(settings);
+  });
+
+  it('loads an old blob with no profile field at all, defaulted rather than dropped', async () => {
+    // A blob written before this workstream shipped has no `profile` key whatsoever. It must
+    // keep loading — with the rest of its contents intact — rather than falling back to
+    // `DEFAULT_SETTINGS` wholesale.
+    await seed(
+      JSON.stringify({
+        contacts: [MEERA],
+        userName: 'Asha',
+        sharing: { sos: true, anon_aggregate: false, cloud_backup: false, family_share: false },
+        sensorSource: 'simulated',
+      }),
+    );
+
+    const settings = await readSettings();
+
+    expect(settings.profile).toEqual(DEFAULT_PROFILE);
+    expect(settings.userName).toBe('Asha');
+    expect(settings.contacts).toEqual([MEERA]);
+  });
+
+  it('survives a malformed profile field, defaulting just that field', async () => {
+    for (const profile of [null, 'nope', 42, { ageBand: 'ancient', chronicCondition: 'yes' }]) {
+      await seed(JSON.stringify({ userName: 'Asha', profile }));
+      const settings = await readSettings();
+      expect(settings.profile).toEqual(DEFAULT_PROFILE);
+      expect(settings.userName).toBe('Asha');
+    }
   });
 
   it('drops a contact whose number cannot reach anyone, keeping the rest', async () => {
@@ -334,5 +370,38 @@ describe('setSharingPref and isSosEnabled', () => {
     const forged = { ...DEFAULT_SETTINGS, sharing: { ...DEFAULT_SETTINGS.sharing, sos: 1 } };
 
     expect(isSosEnabled(forged as unknown as PersistedSettings)).toBe(false);
+  });
+});
+
+describe('setProfile', () => {
+  it('patches one field and leaves the rest of the profile alone', () => {
+    const next = setProfile(DEFAULT_SETTINGS, { ageBand: '60plus' });
+
+    expect(next.profile).toEqual({ ...DEFAULT_PROFILE, ageBand: '60plus' });
+  });
+
+  it('leaves the rest of the settings untouched', () => {
+    const withName = { ...DEFAULT_SETTINGS, userName: 'Asha' };
+
+    const next = setProfile(withName, { pregnant: true });
+
+    expect(next.userName).toBe('Asha');
+    expect(next.contacts).toBe(withName.contacts);
+  });
+
+  it('accepts multiple fields in one patch', () => {
+    const next = setProfile(DEFAULT_SETTINGS, { chronicCondition: true, outdoorWorker: true });
+
+    expect(next.profile).toEqual({
+      ...DEFAULT_PROFILE,
+      chronicCondition: true,
+      outdoorWorker: true,
+    });
+  });
+
+  it('does not mutate the settings passed in', () => {
+    setProfile(DEFAULT_SETTINGS, { pregnant: true });
+
+    expect(DEFAULT_SETTINGS.profile).toEqual(DEFAULT_PROFILE);
   });
 });

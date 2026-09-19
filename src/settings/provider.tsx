@@ -20,12 +20,14 @@ import {
 } from 'react';
 
 import type { DataSharingPref, SensorSourceOption } from '@/constants/health-data';
+import type { UserProfile } from '@/settings/profile';
 import type { EmergencyContact } from '@/sos/types';
 
 import {
   DEFAULT_SETTINGS,
   readSettings,
   removeContact as removeContactIn,
+  setProfile as setProfileIn,
   setSharingPref,
   upsertContact,
   writeSettings,
@@ -51,6 +53,9 @@ export type SettingsStore = {
   readonly setUserName: (name: string) => void;
   readonly setSharing: (key: DataSharingPref['key'], value: boolean) => void;
   readonly setSensorSource: (source: SensorSourceOption['key']) => void;
+  /** Patch one or more "About you" fields. See `src/settings/profile.ts` — captured, not
+   *  yet applied to risk output. */
+  readonly setProfile: (patch: Partial<UserProfile>) => void;
 };
 
 const SettingsContext = createContext<SettingsStore | null>(null);
@@ -108,6 +113,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setSettings((prev) => ({ ...prev, sensorSource: source }));
   }, []);
 
+  const setProfile = useCallback((patch: Partial<UserProfile>) => {
+    setSettings((prev) => setProfileIn(prev, patch));
+  }, []);
+
   return (
     <SettingsContext.Provider
       value={{
@@ -119,6 +128,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         setUserName,
         setSharing,
         setSensorSource,
+        setProfile,
       }}>
       {children}
     </SettingsContext.Provider>
