@@ -17,13 +17,16 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { getAlertPermission, requestAlertPermission } from '@/alerts/notify';
+import { AlertsProvider } from '@/alerts/provider';
 import SettingsScreen from '@/app/settings';
 import { SettingsProvider } from '@/settings/provider';
 import { readSettings, SETTINGS_KEY } from '@/settings/store';
 
-// `@/alerts/notify` talks to `expo-notifications`; the screen's own concern is only whether it
-// calls the right function at the right moment and reacts to what comes back, so the module is
-// mocked directly rather than driven through the (also-mocked) native module two layers down.
+// `@/alerts/notify` talks to `expo-notifications`; the screen's own concern (through the real
+// `AlertsProvider`, wrapped below — see that module's doc for why permission is shared state
+// rather than a private read here) is only whether the right function gets called at the right
+// moment and the screen reacts to what comes back, so the native-facing module is mocked
+// directly rather than driven through the (also-mocked) native module two layers down.
 jest.mock('@/alerts/notify', () => ({
   ensureAlertChannels: jest.fn(() => Promise.resolve()),
   getAlertPermission: jest.fn(() => Promise.resolve('undetermined')),
@@ -54,7 +57,9 @@ function renderSettings() {
   return render(
     <SafeAreaProvider initialMetrics={INSETS}>
       <SettingsProvider>
-        <SettingsScreen />
+        <AlertsProvider>
+          <SettingsScreen />
+        </AlertsProvider>
       </SettingsProvider>
     </SafeAreaProvider>,
   );
@@ -515,6 +520,49 @@ describe('alert notifications', () => {
     expect(
       screen.queryByText('Notifications are blocked for this app — enable them in Android settings.'),
     ).toBeNull();
+  });
+
+  describe('a fresh install — toggle on by default, OS permission not yet asked', () => {
+    // DEFAULT_SETTINGS.alerts.enabled is true, so a brand-new Android 13+ install lands on this
+    // screen with the toggle already on and the OS permission still 'undetermined' — nobody has
+    // been asked yet, and 'undetermined' alone renders no hint. Without a user-initiated way to
+    // ask right here, the toggle's promise is never actually kept.
+    it('offers a user-initiated way to turn notifications on', async () => {
+      const screen = await renderSettings();
+
+      await waitFor(() => expect(screen.getByText('Turn on notifications')).toBeTruthy());
+    });
+
+    it('requests permission when that prompt is pressed', async () => {
+      mockedRequestAlertPermission.mockResolvedValue('granted');
+      const screen = await renderSettings();
+      await waitFor(() => expect(screen.getByText('Turn on notifications')).toBeTruthy());
+
+      await fireEvent.press(screen.getByText('Turn on notifications'));
+
+      await waitFor(() => expect(mockedRequestAlertPermission).toHaveBeenCalledTimes(1));
+    });
+
+    it('hides the prompt once permission is granted', async () => {
+      mockedRequestAlertPermission.mockResolvedValue('granted');
+      const screen = await renderSettings();
+      await waitFor(() => expect(screen.getByText('Turn on notifications')).toBeTruthy());
+
+      await fireEvent.press(screen.getByText('Turn on notifications'));
+
+      await waitFor(() => expect(screen.queryByText('Turn on notifications')).toBeNull());
+    });
+
+    it('does not offer the prompt while the toggle itself is off', async () => {
+      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ alerts: { enabled: false } }));
+
+      const screen = await renderSettings();
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Alert notifications').props.value).toBe(false),
+      );
+      expect(screen.queryByText('Turn on notifications')).toBeNull();
+    });
   });
 });
 

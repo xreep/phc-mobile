@@ -5,6 +5,17 @@
  * that is unit-tested on its own; this hook is only the impure shell that calls it at the right
  * moment and hands the result to the OS.
  *
+ * ## Permission comes from `AlertsProvider`, not from a private read here
+ * This hook used to own a private `useState<AlertPermission>`, read once in a mount-only effect.
+ * The Settings screen owned a second, independent copy the same way. Because Expo Router keeps
+ * every tab mounted, granting the permission from Settings updated *Settings'* copy only — this
+ * hook, mounted the whole time on the Dashboard tab, kept believing `'undetermined'` for the rest
+ * of the process's life, so the gate below never opened on Android 13+ until the app was killed
+ * and relaunched. `@/alerts/provider`'s `useAlertPermission()` fixes that by making the current
+ * permission one piece of context state both places read — see that module's doc for the rest of
+ * the reasoning, including why it also re-reads on `AppState` 'active' and when the Settings
+ * toggle flips to enabled.
+ *
  * ## Foreground-only, for now
  * The app's sensing is foreground-only until the foreground-service milestone (see
  * `docs/features/notifications.md`), so this hook only ever runs while its screen is mounted and
@@ -32,35 +43,32 @@
  * category's rise-notification and start its cooldown, exactly as an unwanted-disabled tick would
  * (see above) — and if the user then switches to Health Connect and is genuinely at risk, the
  * category could already be "cooling down" from a demo reading that never should have counted.
- * Gating planning on `live` keeps the tracked state exclusively a history of real readings, so a
- * switch from simulated to live starts that category's history from a clean, honest baseline
- * (`initialAlertState()`'s green) rather than from demo noise.
+ * Gating planning on `live` keeps the tracked state exclusively a history of real readings: a
+ * switch from simulated back to live *resumes planning from the last trusted live state* (the
+ * state a prior live tick left behind, frozen while `live` was false) — it is never reset to
+ * `initialAlertState()`'s green, and it never incorporates a simulated reading either way.
  *
  * ## Why the planning effect depends on the gate, not only on `evaluatedAt`
- * `permission` starts `'undetermined'` on every mount and only resolves to a real value after
- * the async permission read completes — one render after the assessment the screen mounted with
- * is already known. An effect keyed on `evaluatedAt` alone would evaluate that first assessment
- * against a gate that has not opened yet, see it blocked, and then never look again until the
- * *next* assessment happened to arrive — a category that was already red at launch would wait for
- * the following tick rather than notifying once permission (or `enabled`) catches up. So
- * `enabled`, `live`, and `permission` are real dependencies of the planning effect alongside
- * `evaluatedAt`: any of the four newly making the gate true re-evaluates the *current* assessment,
- * which is exactly the "treat it like a fresh look" behaviour the previous section describes.
- * `assessment` itself is still read from a ref rather than listed directly, because a parent
- * re-render can hand down a new-but-equal-content object between real changes, and only
- * `evaluatedAt` is defined to mean "the assessment actually advanced".
+ * `permission` starts `'undetermined'` on every mount and only resolves to a real value once
+ * `AlertsProvider`'s own read completes. An effect keyed on `evaluatedAt` alone would evaluate
+ * the first assessment against a gate that has not opened yet, see it blocked, and then never
+ * look again until the *next* assessment happened to arrive — a category that was already red at
+ * launch would wait for the following tick rather than notifying once permission (or `enabled`)
+ * catches up. So `enabled`, `live`, and `permission` are real dependencies of the planning effect
+ * alongside `evaluatedAt`: any of the four newly making the gate true re-evaluates the *current*
+ * assessment, which is exactly the "treat it like a fresh look" behaviour the previous section
+ * describes — and, since `permission` now comes from shared context, this is also what makes a
+ * grant from the Settings screen reach this already-mounted hook without a remount. `assessment`
+ * itself is still read from a ref rather than listed directly, because a parent re-render can
+ * hand down a new-but-equal-content object between real changes, and only `evaluatedAt` is
+ * defined to mean "the assessment actually advanced".
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
+import { deliverAlert } from '@/alerts/notify';
 import { initialAlertState, planAlerts, type AlertState } from '@/alerts/plan';
-import {
-  deliverAlert,
-  ensureAlertChannels,
-  getAlertPermission,
-  requestAlertPermission,
-  type AlertPermission,
-} from '@/alerts/notify';
+import { useAlertPermission } from '@/alerts/provider';
 import type { RiskAssessment } from '@/risk';
 
 export type UseAlertsInput = {
@@ -77,27 +85,14 @@ export type UseAlertsOptions = {
   /** Injected in tests, same convention as `useSos`'s `*Impl` options. */
   readonly planImpl?: typeof planAlerts;
   readonly deliverImpl?: typeof deliverAlert;
-  readonly ensureChannelsImpl?: typeof ensureAlertChannels;
-  readonly getPermissionImpl?: typeof getAlertPermission;
-  readonly requestPermissionImpl?: typeof requestAlertPermission;
   readonly cooldownMs?: number;
 };
 
-export type AlertsController = {
-  readonly permission: AlertPermission;
-  /** Raises the OS permission prompt. User-initiated only — call this from a press handler,
-   *  never from an effect, or the dialog appears unprompted (see `notify.ts`'s module doc). */
-  readonly requestPermission: () => void;
-};
-
-export function useAlerts(input: UseAlertsInput, options: UseAlertsOptions = {}): AlertsController {
-  const ensureChannels = options.ensureChannelsImpl ?? ensureAlertChannels;
-  const readPermission = options.getPermissionImpl ?? getAlertPermission;
-  const askPermission = options.requestPermissionImpl ?? requestAlertPermission;
+export function useAlerts(input: UseAlertsInput, options: UseAlertsOptions = {}): void {
   const deliver = options.deliverImpl ?? deliverAlert;
   const plan = options.planImpl ?? planAlerts;
 
-  const [permission, setPermission] = useState<AlertPermission>('undetermined');
+  const { permission } = useAlertPermission();
 
   // Planner state lives in a ref, not `useState`: nothing here is rendered, and a plain object
   // mutated between ticks is exactly what `planAlerts` is built to consume as `previous`.
@@ -111,23 +106,6 @@ export function useAlerts(input: UseAlertsInput, options: UseAlertsOptions = {})
   useEffect(() => {
     assessmentRef.current = input.assessment;
   });
-
-  // Channels must exist before the OS will even offer the Android 13+ permission prompt
-  // (`docs/features/notifications.md` records the verification), and reading the current
-  // permission on mount is what lets the Settings screen and this hook agree on state without
-  // either one guessing. Both are best-effort: `ensureAlertChannels` already swallows its own
-  // failures, and a failed read just leaves `permission` at its safe 'undetermined' default.
-  useEffect(() => {
-    void ensureChannels();
-    void readPermission().then(setPermission);
-    // Intentionally mount-only: channels do not need recreating, and the permission is otherwise
-    // refreshed by `requestPermission` below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const requestPermission = useCallback(() => {
-    void askPermission().then(setPermission);
-  }, [askPermission]);
 
   const evaluatedAt = input.assessment.evaluatedAt;
   const { enabled, live } = input;
@@ -150,6 +128,4 @@ export function useAlerts(input: UseAlertsInput, options: UseAlertsOptions = {})
     // doc's last section).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evaluatedAt, enabled, live, permission]);
-
-  return { permission, requestPermission };
 }

@@ -228,6 +228,29 @@ describe('intent content', () => {
     expect(intents[0].title).toBe('Emergency: possible fall detected');
   });
 
+  it('titles a same-level reminder with the level phrase, even while critical stays true', () => {
+    // A cooldown repeat is not a second fall — only the tick where `critical` actually flips
+    // false→true gets the "Emergency" wording (see `plan.ts`'s rule 2 note).
+    const first = planAlerts(
+      initialAlertState(),
+      assessment([{ key: 'fall', level: 'red', critical: true }]),
+      T0,
+    );
+    expect(first.intents[0].title).toBe('Emergency: possible fall detected');
+
+    const reminder = planAlerts(
+      first.state,
+      assessment([{ key: 'fall', level: 'red', critical: true }]),
+      T0 + ALERT_COOLDOWN_MS,
+    );
+
+    expect(reminder.intents).toHaveLength(1);
+    expect(reminder.intents[0].title).toBe('Fall Detection risk: high');
+    // The channel routing still reflects the ongoing critical state, even though the wording
+    // does not repeat "Emergency".
+    expect(reminder.intents[0].critical).toBe(true);
+  });
+
   it('bodies the notification with the category guidance, first sentence only', () => {
     const { intents } = planAlerts(
       initialAlertState(),

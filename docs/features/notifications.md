@@ -18,24 +18,32 @@ and `critical` every evaluation tick (`RiskAssessment`, `src/risk/types.ts`); no
 feature turned any of that into something the user would notice while not looking at the screen.
 
 ## Architecture
-Three layers, deliberately kept separate so the decision logic is unit-testable without touching
+Four pieces, deliberately kept separate so the decision logic is unit-testable without touching
 `expo-notifications`:
 
 ```
-RiskAssessment (from useRiskAssessment)
+RiskAssessment (from useRiskAssessment)          settings.alerts.enabled, AppState 'active'
+        │                                                        │
+        ▼                                                        ▼
+  src/alerts/plan.ts                                  src/alerts/provider.tsx (AlertsProvider)
+  pure: (previous state, assessment, now)             owns the one shared `permission` value —
+  → (next state, intents[])                           reads it on mount, on foreground, and when
+        │                                              the toggle flips to enabled
+        ▼                                                        │
+  src/hooks/use-alerts.ts ◄───────────────── useAlertPermission() ┘
+  impure shell: calls plan() when evaluatedAt/enabled/live/permission change, calls deliver()
+  for each intent
         │
-        ▼
-  src/alerts/plan.ts    — pure: (previous state, assessment, now) → (next state, intents[])
-        │
-        ▼
-  src/hooks/use-alerts.ts — impure shell: calls plan() when evaluatedAt/enabled/live/permission
-        │                    change, calls deliver() for each intent, owns permission state
         ▼
   src/alerts/notify.ts   — thin side-effect layer: channels, permission, scheduleNotificationAsync
 ```
 
-- `src/app/index.tsx` (Dashboard) is the only screen that mounts `useAlerts`, wired to
-  `useRiskAssessment`'s `assessment` and `live`, and to the Settings `alerts.enabled` flag.
+- `src/app/_layout.tsx` mounts `AlertsProvider` once, inside `SettingsProvider` (it reads
+  `settings.alerts.enabled`) and alongside `SensorProvider`. `src/app/index.tsx` (Dashboard) is
+  the only screen that mounts `useAlerts`, wired to `useRiskAssessment`'s `assessment` and `live`,
+  and to the Settings `alerts.enabled` flag; both it and `src/app/settings.tsx` call
+  `useAlertPermission()` to read/request the one shared permission — see **Implementation** below
+  for why a private copy in each place was a real bug, not a hypothetical one.
 - `src/settings/store.ts` / `provider.tsx` / `src/app/settings.tsx` carry the one new persisted
   field, `alerts: { enabled: boolean }`, and the "Alert notifications" toggle, following the exact
   pattern the sensor-source and data-sharing settings already use (validate-on-read, a reducer in
@@ -59,9 +67,15 @@ category, the last-seen level/critical flag and the last-notified level/instant,
 | `dataQuality === 'missing' \| 'stale'` | Never notifies, and the category's tracked state is **frozen** for that tick — see the module doc in `plan.ts` for why updating it would let a stale reading silently consume a real rise. |
 
 Intent shape: `{ category, level, critical, title, body, evaluatedAt }`. Title is
-`"<Category> risk: elevated|high"` for a level rise, or a per-category emergency phrase
-(`"Emergency: possible fall detected"`, etc.) for a critical trigger — only `respiratory`,
-`fall`, and `heat` can ever report `critical: true` (`CRITICAL_RULES` in `@/risk`). Body is the
+`"<Category> risk: elevated|high"` for a level rise or a same-level reminder, or a per-category
+emergency phrase (`"Emergency: possible fall detected"`, etc.) **only on the tick where `critical`
+itself flips `false → true`** — only `respiratory`, `fall`, and `heat` can ever report `critical:
+true` (`CRITICAL_RULES` in `@/risk`). A later same-level reminder while `critical` merely *stays*
+true (rule 3) uses the level phrase, not a second "Emergency": nothing new happened at that
+instant, and repeating the word every cooldown period would both cry wolf and mislead about there
+being a fresh event. The intent's own `critical` flag still mirrors the category's actual state
+regardless of which rule fired, so `notify.ts` still routes an unresolved critical condition's
+reminder to the high-urgency channel — only the *wording* is scoped to the flip. Body is the
 category's own `guidance`, first sentence only.
 
 ### The OS layer (`src/alerts/notify.ts`)
@@ -80,37 +94,70 @@ Every exported function (`ensureAlertChannels`, `requestAlertPermission`, `getAl
 `deliverAlert`) is wrapped in try/catch. A missing native module, a denied permission, or an OS
 quirk degrades to "no notification appears" — it must never throw into the Dashboard render.
 
+### The permission provider (`src/alerts/provider.tsx`)
+`AlertsProvider`/`useAlertPermission()` own the **one** shared `{ permission, refreshPermission,
+requestPermission }`, mounted once in `_layout.tsx`. This exists because of a real bug caught in
+review, not a hypothetical one: the first version of this feature had `useAlerts` read its own
+private permission state in a mount-only effect, and the Settings screen kept a second,
+independent copy of the same thing. Because Expo Router keeps every tab mounted, granting the
+permission from Settings updated *Settings' own* copy only — the Dashboard's `useAlerts`, mounted
+the whole time on the Dashboard tab, kept believing `'undetermined'` for the rest of the process's
+life, so its delivery gate never opened on Android 13+ until the app was killed and relaunched.
+Moving permission into one context fixes this the way React fixes any shared-state problem: both
+consumers read the same value, so a change in one is a re-render in both. The provider also
+re-reads permission (without prompting) on `AppState` `'active'` — the OS permission dialog itself
+backgrounds and re-foregrounds the app, and a user who grants notifications from Android's own
+settings app also returns here via a foreground transition — and whenever
+`settings.alerts.enabled` flips from off to on, so the gate is current the moment it starts to
+matter rather than only as fresh as the last foreground transition.
+
 ### The hook (`src/hooks/use-alerts.ts`)
 `useAlerts({ assessment, enabled, live })` holds `AlertState` in a `useRef` (nothing here is
-rendered) and re-runs the planner when `assessment.evaluatedAt`, `enabled`, `live`, or `permission`
-change. **Planning itself — not only delivery — is gated on `enabled && live && permission ===
-'granted'`.** This is the one non-obvious decision in this workstream: the obvious design gates
-only `deliverAlert` and always calls `planAlerts` so the tracked state "keeps up". That is wrong
-here, because `planAlerts` marks a category notified (starting its cooldown) the instant it
-decides one is *warranted* — not when one is actually shown. If planning ran while disabled, or
-before permission was granted, a genuine rise would silently start a category's cooldown with the
-user never seeing anything, and turning alerts on later could mean waiting out the rest of a
-30-minute cooldown for a notification that never happened. Gating planning itself means
-re-enabling (or permission being granted) re-evaluates the *current* assessment fresh, exactly as
-an initial launch does — see `use-alerts.ts`'s module doc for the full reasoning, including why
-`live` gates planning the same way (never let the simulated demo window consume a real category's
-notification slot).
+rendered), reads `permission` from `useAlertPermission()`, and re-runs the planner when
+`assessment.evaluatedAt`, `enabled`, `live`, or `permission` change. **Planning itself — not only
+delivery — is gated on `enabled && live && permission === 'granted'`.** This is the one
+non-obvious decision in this workstream: the obvious design gates only `deliverAlert` and always
+calls `planAlerts` so the tracked state "keeps up". That is wrong here, because `planAlerts` marks
+a category notified (starting its cooldown) the instant it decides one is *warranted* — not when
+one is actually shown. If planning ran while disabled, or before permission was granted, a genuine
+rise would silently start a category's cooldown with the user never seeing anything, and turning
+alerts on later could mean waiting out the rest of a 30-minute cooldown for a notification that
+never happened. Gating planning itself means re-enabling (or permission being granted) re-evaluates
+the *current* assessment fresh, exactly as an initial launch does — see `use-alerts.ts`'s module
+doc for the full reasoning, including why `live` gates planning the same way (never let the
+simulated demo window consume a real category's notification slot), and why making `permission` a
+real effect dependency (rather than read once) is what lets a grant from the shared provider reach
+this already-mounted hook without a remount.
 
 ### Never on the simulated window
 `live` comes from `DashboardRisk.live` (`useRiskAssessment`), which is `true` only when readings
 came from Health Connect. The simulated sensor window is weather-driven demo data — its heat
 category can turn red because a synthetic humidity value climbed — and a push about that would be
 a false alarm with no real person behind it. `live: false` freezes planning entirely for that
-tick, so switching from simulated to live data always starts each category's alert history from a
-clean baseline rather than from demo noise.
+tick: the tracked state is left exactly as the last live tick left it, so switching from simulated
+back to live data resumes planning **from the last trusted live state**, never from
+`initialAlertState()`'s green and never incorporating a simulated reading either way.
+
+### The Settings prompt for a fresh install
+`DEFAULT_SETTINGS.alerts.enabled` is `true`, so a brand-new Android 13+ install can reach the
+Alerts section with the toggle already on and the OS permission still `'undetermined'` — nobody
+has been asked yet, and an undetermined permission renders no hint on its own (only `'denied'`
+does). `src/app/settings.tsx` closes that gap: when `settings.alerts.enabled &&
+alertPermission === 'undetermined'`, the screen shows a user-initiated "Turn on notifications"
+row that calls the provider's `requestPermission()`, so the toggle's promise is actually kept
+rather than silently waiting for some other prompt that may never come.
 
 ## Files
-- `src/alerts/plan.ts`, `src/alerts/notify.ts` — planner and OS layer.
-- `src/alerts/__tests__/plan.test.ts`, `notify.test.ts`, `fixtures.ts`.
+- `src/alerts/plan.ts`, `src/alerts/notify.ts`, `src/alerts/provider.tsx` — planner, OS layer, and
+  the shared permission context.
+- `src/alerts/__tests__/plan.test.ts`, `notify.test.ts`, `provider.test.tsx`, `fixtures.ts`.
 - `src/hooks/use-alerts.ts`, `src/hooks/__tests__/use-alerts.test.ts`.
 - `src/settings/store.ts`, `src/settings/provider.tsx`, `src/app/settings.tsx` — `alerts` field,
-  `setAlertsEnabled`, the "Alerts" section.
+  `setAlertsEnabled`, the "Alerts" section (toggle + blocked notice + the fresh-install prompt).
+- `src/app/_layout.tsx` — mounts `AlertsProvider` once, inside `SettingsProvider`.
 - `src/app/index.tsx` — `useAlerts` wired into the Dashboard.
+- `src/__tests__/home-screen.test.tsx`, `src/__tests__/simulate-fall.test.tsx` — wrapped in
+  `<AlertsProvider>` now that `useAlerts` requires it.
 - `jest/setup-after-env.js` — global `expo-notifications` mock.
 - `app.json` — `expo-notifications` config plugin.
 
@@ -125,18 +172,34 @@ number — see **Privacy** below for why that is a deliberate choice, not an inc
 Unit tested (Jest) at every layer:
 - `src/alerts/__tests__/plan.test.ts` — every rule in the table above, including the cooldown
   boundary on both sides, critical bypassing the cooldown, missing/stale never notifying (and not
-  consuming a later real rise), falling-then-rising notifying again, and the first-evaluation case.
+  consuming a later real rise), falling-then-rising notifying again, the first-evaluation case, and
+  that a same-level reminder titles with the level phrase — not a repeated "Emergency" — while
+  `critical` merely stays true.
 - `src/alerts/__tests__/notify.test.ts` — channel importance/vibration, permission-status mapping,
   channel routing by `critical`, and that every function swallows a thrown error.
-- `src/hooks/__tests__/use-alerts.test.ts` — fake timers; delivery gated on
+- `src/alerts/__tests__/provider.test.tsx` — channels created and permission read once on mount;
+  `requestPermission` updates the shared state; re-reads on `AppState` `'active'` (and not on other
+  transitions); re-reads exactly on the Settings toggle's off→on transition (not on-stays-on or
+  on→off).
+- `src/hooks/__tests__/use-alerts.test.ts` — fake timers, `useAlertPermission` mocked so the
+  returned `permission` can move between renders of the **same** hook instance; delivery gated on
   `enabled && live && permission === 'granted'`; never on the simulated window; exactly one
-  delivery per intent; no re-plan when `evaluatedAt` is unchanged; re-enabling re-evaluates the
-  current assessment.
+  delivery per intent; no re-plan when `evaluatedAt` is unchanged; a grant surfacing through the
+  mocked provider delivers without a remount (the regression test for review round 1's CRITICAL
+  #1); re-enabling (`enabled` transitioning false→true on the same instance) re-evaluates the
+  current assessment; a toggle flip off-then-back-on inside the cooldown window does not duplicate
+  an already-delivered notification.
 - `src/settings/__tests__/store.test.ts` — `alerts` defaults, round-trip, and tolerance of an
   absent/malformed stored field.
-- `src/__tests__/settings-screen.test.tsx` — the toggle persists, requests permission only when
-  turned on, and shows the "blocked" notice when the OS permission is denied (both from a toggle
-  press and from a permission already denied on load).
+- `src/__tests__/settings-screen.test.tsx` — the toggle persists, requests permission (through the
+  real `AlertsProvider`, with `@/alerts/notify` mocked underneath it) only when turned on, shows
+  the "blocked" notice when the OS permission is denied (both from a toggle press and from a
+  permission already denied on load), and offers/hides the fresh-install "Turn on notifications"
+  prompt correctly.
+- `src/__tests__/home-screen.test.tsx`, `src/__tests__/simulate-fall.test.tsx` — wrap the Dashboard
+  in `<AlertsProvider>` (alongside `SensorProvider`) now that `useAlerts` requires it; the global
+  `expo-notifications` mock leaves permission `'undetermined'`, so these suites' assertions are
+  unchanged from before this feature existed.
 
 ## Device Validation
 **Device validated: NO.** Everything above is Unit tested / Integration tested (Jest) against the
@@ -165,6 +228,13 @@ vibration behaviour are unverified.
   change, but nothing here has run on iOS).
 - **A tap does not deep-link yet.** `deliverAlert` carries `category` in `data` but nothing reads
   it on notification tap.
+- **An environment-only change can be planned up to 60 seconds late.** `useRiskAssessment` re-reads
+  `Date.now()` on a 60 s tick (`RE_EVALUATE_INTERVAL_MS`); a fresh sensor poll advances the
+  evaluation instant sooner, but a heat category that turns `red` purely because the weather
+  observation changed — with no new sensor reading in between — only produces a new
+  `assessment.evaluatedAt` (and so a new planner tick) on the next 60 s boundary. This is inherited
+  from `useRiskAssessment`, which this workstream does not modify (audit KEEP), and is a delay
+  bound, not a missed notification: the next tick still catches it.
 
 ## Security
 - **`android.permission.POST_NOTIFICATIONS`** (Android 13+). Declared in
@@ -180,9 +250,13 @@ vibration behaviour are unverified.
   2:  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   3:  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   ```
-  The permission is never requested implicitly — `requestAlertPermission()` only ever runs from the
-  Settings toggle's `onValueChange`, i.e. a direct user tap, per the brief's "user-initiated only"
-  requirement.
+  The permission is never requested implicitly — `requestAlertPermission()` only ever runs from a
+  direct user tap (the Settings toggle's `onValueChange`, or the fresh-install "Turn on
+  notifications" row), per the brief's "user-initiated only" requirement.
+- `ensureAlertChannels()` is called from exactly one place — `AlertsProvider`'s mount effect — not
+  from both the hook and the Settings screen as an earlier version of this feature had it. Android
+  channels are idempotent to recreate, so the duplicate call was harmless, but one owner is the
+  simpler invariant to keep true.
 - No new network calls, no new storage of health data. `deliverAlert`'s only external call is
   `expo-notifications`' local `scheduleNotificationAsync`.
 

@@ -18,7 +18,11 @@
  * 2. **A critical trigger appearing.** `critical` flipping `false → true` always notifies,
  *    immediately, even if a same-level notification fired a moment ago. This is deliberately a
  *    separate condition from the level rule: a category can already be `red` (and cooled down)
- *    when a critical trigger (PRD §7.2.5) fires on top of it, and that must not wait.
+ *    when a critical trigger (PRD §7.2.5) fires on top of it, and that must not wait. Only *this*
+ *    tick's notification gets the "Emergency: …" title (see `buildIntent`) — a later same-level
+ *    reminder while `critical` merely *stays* true (rule 3, below) is not a second fall, and
+ *    saying "Emergency" again every cooldown period would both cry wolf and mislead: nothing new
+ *    happened at that instant, the first emergency is simply still unresolved.
  * 3. **A same-level repeat.** A category sitting at `amber` or `red` with no rise and no new
  *    critical flip re-notifies only after `cooldownMs` (default {@link ALERT_COOLDOWN_MS}, 30
  *    minutes) has elapsed since the *last notification for that category* — not since the level
@@ -140,8 +144,16 @@ export type PlanAlertsResult = {
   readonly intents: readonly AlertIntent[];
 };
 
-function buildIntent(cat: CategoryAssessment, evaluatedAt: number): AlertIntent {
-  const title = cat.critical
+/**
+ * `criticalFlipped` — whether *this tick's* notification is the critical trigger newly
+ * appearing (rule 2), as opposed to a level rise (rule 1) or a same-level reminder (rule 3) that
+ * happens to have `cat.critical` still `true` from an earlier tick. Only the former gets the
+ * "Emergency: …" title; the intent's own `critical` flag still mirrors `cat.critical` regardless
+ * (`notify.ts` routes on it), so an unresolved critical condition's periodic reminder still
+ * reaches the high-urgency channel — it is only the wording that must not cry wolf twice.
+ */
+function buildIntent(cat: CategoryAssessment, evaluatedAt: number, criticalFlipped: boolean): AlertIntent {
+  const title = criticalFlipped
     ? criticalTitle(cat.key)
     : `${CATEGORY_LABELS[cat.key]} risk: ${LEVEL_WORD[cat.level as 'amber' | 'red']}`;
 
@@ -190,7 +202,7 @@ export function planAlerts(
     const shouldNotify = criticalFlipped || roseIntoElevated || sameLevelCooldownElapsed;
 
     if (shouldNotify) {
-      intents.push(buildIntent(cat, assessment.evaluatedAt));
+      intents.push(buildIntent(cat, assessment.evaluatedAt, criticalFlipped));
     }
 
     const fell = LEVEL_RANK[cat.level] < LEVEL_RANK[prev.level];

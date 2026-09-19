@@ -1,12 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 
-import {
-  ensureAlertChannels,
-  getAlertPermission,
-  requestAlertPermission,
-  type AlertPermission,
-} from '@/alerts/notify';
+import { useAlertPermission } from '@/alerts/provider';
 import { Card } from '@/components/card';
 import { ContactEditor } from '@/components/contact-editor';
 import { Screen } from '@/components/screen';
@@ -45,30 +40,16 @@ export default function SettingsScreen() {
 
   const relayConfigured = isTwilioConfigured();
 
-  // M3 alerts. Read on mount so a permission denied in an earlier session is visible before the
-  // user ever touches the toggle, not only after they flip it. `ensureAlertChannels` runs here
-  // too — cheap and idempotent — because it must complete before Android 13+ will even offer the
-  // permission prompt (`docs/features/notifications.md`), and this screen must not assume the
-  // Dashboard's own `useAlerts` has already run first.
-  const [alertPermission, setAlertPermission] = useState<AlertPermission>('undetermined');
-  useEffect(() => {
-    let cancelled = false;
-    void ensureAlertChannels();
-    void getAlertPermission().then((permission) => {
-      if (!cancelled) setAlertPermission(permission);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // M3 alerts. `AlertsProvider` (mounted in `_layout.tsx`) owns the one shared permission state
+  // — the Dashboard's `useAlerts` reads the same value, so a grant made here reaches it without a
+  // remount. See `@/alerts/provider`'s module doc for why a private copy here was the bug.
+  const { permission: alertPermission, requestPermission: requestAlertPermission } = useAlertPermission();
 
   const handleAlertsToggle = (value: boolean) => {
     setAlertsEnabled(value);
     // User-initiated only — the prompt must never appear from an effect. Turning the toggle off
     // never touches the OS permission; there is nothing to ask for.
-    if (value) {
-      void requestAlertPermission().then(setAlertPermission);
-    }
+    if (value) requestAlertPermission();
   };
 
   return (
@@ -282,6 +263,20 @@ export default function SettingsScreen() {
           <ThemedText type="small" style={{ color: risk.red.fg }}>
             Notifications are blocked for this app — enable them in Android settings.
           </ThemedText>
+        ) : null}
+        {/* On by default (`DEFAULT_SETTINGS.alerts.enabled`), which means a fresh Android 13+
+            install can reach this screen with the toggle already on but the OS permission still
+            `'undetermined'` — nobody has been asked yet, and an undetermined permission renders no
+            hint on its own. Offering the prompt here, rather than waiting for some other
+            user-initiated moment that may never come, is what actually gets the notification the
+            toggle promises. */}
+        {settings.alerts.enabled && alertPermission === 'undetermined' ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={requestAlertPermission}
+            style={({ pressed }) => pressed && styles.pressed}>
+            <ThemedText type="linkPrimary">Turn on notifications</ThemedText>
+          </Pressable>
         ) : null}
       </Card>
 

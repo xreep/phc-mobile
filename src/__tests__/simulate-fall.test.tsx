@@ -34,6 +34,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { useMemo } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { AlertsProvider } from '@/alerts/provider';
 import { SosAlert } from '@/components/sos-alert';
 import HomeScreen from '@/app/index';
 import { buildMockReadings, MOCK_WINDOW, buildEnvironmentSnapshot } from '@/constants/mock-sensor-window';
@@ -177,7 +178,9 @@ function renderHome() {
       <EnvironmentProvider>
         <SettingsProvider>
           <SensorProvider>
-            <HomeScreen />
+            <AlertsProvider>
+              <HomeScreen />
+            </AlertsProvider>
           </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>
