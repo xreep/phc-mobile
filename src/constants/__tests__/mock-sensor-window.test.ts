@@ -231,12 +231,17 @@ describe('the assessment the Dashboard renders', () => {
         guidance: 'Extreme heat danger — get indoors or into shade and cool down now.',
       },
       {
+        // Amber on the *air*, not the blood oxygen: the observation's AQI of 168 is EPA
+        // "Unhealthy", which is the respiratory advisory precursor (PS 26181 §3b). Not a
+        // flag — `flagged` stays false and SpO₂ 97 % is normal — and the metric line carries
+        // both numbers so a reader can see which one moved the card.
         key: 'respiratory',
-        level: 'green',
+        level: 'amber',
         flagged: false,
-        rule: null,
-        metric: 'SpO₂ 97%',
-        guidance: 'Blood oxygen is in the normal range.',
+        rule: 'respiratory.aqi.unhealthy',
+        metric: 'SpO₂ 97% · AQI 168 (Unhealthy)',
+        guidance:
+          'Air quality is unhealthy — limit prolonged outdoor exertion and keep windows closed.',
       },
       {
         key: 'cardiovascular',
@@ -278,9 +283,12 @@ describe('the assessment the Dashboard renders', () => {
     ]);
   });
 
-  it('scores heat in the red band and leaves the rest at zero', () => {
+  it('scores heat in the red band, respiratory at the air-quality advisory, and the rest at zero', () => {
     expect(assessment.byCategory.heat.score).toBeGreaterThanOrEqual(90);
-    expect(assessment.byCategory.respiratory.score).toBe(0);
+    // The advisory's configured amber score, not a multiplied SpO₂ score: SpO₂ 97 % scores 0
+    // on its own, and `envMultiplier` is still reported rather than applied.
+    expect(assessment.byCategory.respiratory.score).toBe(T.env.aqiUnhealthyScore);
+    expect(assessment.byCategory.respiratory.flagged).toBe(false);
     expect(assessment.byCategory.cardiovascular.score).toBe(0);
     expect(assessment.byCategory.fall.score).toBe(0);
     expect(assessment.byCategory.dehydration.score).toBe(0);

@@ -182,10 +182,16 @@ describe('Home dashboard', () => {
     const { getByText, getAllByText } = await renderHome();
 
     expect(getByText('Alert')).toBeTruthy(); // heat → red
-    // The other five → green. Two of those are the §7.2.4 advisories, which stay green in
+    // Respiratory → amber: the fixture's AQI of 168 is EPA "Unhealthy", which is the
+    // air-quality advisory precursor (PS 26181 §3b). Not a flag — SpO₂ is normal — and the
+    // metric line is composed inside `rules/respiratory.ts`, so it is asserted here for the
+    // same reason the heat index is: the string exists nowhere else in the app.
+    expect(getByText('Caution')).toBeTruthy();
+    expect(getByText('SpO₂ 97% · AQI 168 (Unhealthy)')).toBeTruthy();
+    // The other four → green. Two of those are the §7.2.4 advisories, which stay green in
     // extreme heat because each is a conjunction: the heart rate has neither drifted off the
     // window's baseline nor stayed elevated through a long still stretch.
-    expect(getAllByText('Normal')).toHaveLength(5);
+    expect(getAllByText('Normal')).toHaveLength(4);
   });
 
   it('shows the newest reading’s vitals', async () => {

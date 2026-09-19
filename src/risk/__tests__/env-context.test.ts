@@ -97,10 +97,13 @@ describe('when there is a real uplift, the block is present and self-disclaiming
       const ctx = environmentalContextFor({ key, envMultiplier: 1.25 }) as EnvironmentalContext;
       expect(ctx.disclaimer).toBe(ENV_CONTEXT_DISCLAIMER);
     }
-    // The disclaimer is only load-bearing if it disclaims the two things the card shows.
+    // The disclaimer is only load-bearing if it disclaims the two things the card shows — and
+    // only honest if it disclaims *this weighting* rather than air quality as a whole, because
+    // the respiratory advisory does move the card on bad air (see `aqi-advisory.test.ts`).
     expect(ENV_CONTEXT_DISCLAIMER).toMatch(/not included in the score/i);
     expect(ENV_CONTEXT_DISCLAIMER).toMatch(/status/i);
-    expect(ENV_CONTEXT_DISCLAIMER).toMatch(/body readings/i);
+    expect(ENV_CONTEXT_DISCLAIMER).toMatch(/this weighting/i);
+    expect(ENV_CONTEXT_DISCLAIMER).not.toMatch(/body readings alone/i);
   });
 
   it('never claims the context lowers risk — the uplift is always an addition', () => {

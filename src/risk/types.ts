@@ -123,7 +123,12 @@ export type EnvironmentSnapshot = {
    * that here would put a figure the screen bands as NOAA next to one that is not.
    */
   readonly heatIndexC?: number;
-  /** Air quality index. Unused by Tier 1; reserved for the respiratory multiplier. */
+  /**
+   * Air quality index on the US EPA 0–500 scale (see `src/environment/aqi.ts` for how it is
+   * derived). Read by the respiratory rule twice: for the reported-only `envMultiplier`
+   * (PRD §7.2.3), and for the `respiratory.aqi.*` advisory precursors, which do move the
+   * card's level above `RiskThresholds.env.aqiAdvisoryAbove`.
+   */
   readonly aqi?: number;
   /** Epoch ms the observation was made, for staleness checks. */
   readonly observedAt?: number;
@@ -169,7 +174,21 @@ export type RuleId =
   /** The same drift, at a magnitude that reads as more than mild fluid loss. */
   | 'dehydration.cardiovascularDrift.severe'
   /** Prolonged stillness with an elevated resting heart rate. */
-  | 'fatigue.inactiveElevatedHr';
+  | 'fatigue.inactiveElevatedHr'
+  /**
+   * EPA AQI 151–200, "Unhealthy": the first band whose cautionary statement is addressed to
+   * everyone, not only to sensitive groups. Fires from `env.aqiAdvisoryAbove` upward. Air
+   * quality advisory only — moves the card, never `flagged`, never critical.
+   */
+  | 'respiratory.aqi.unhealthy'
+  /** EPA AQI 201–300, "Very Unhealthy" (health alert). Same advisory-only standing. */
+  | 'respiratory.aqi.veryUnhealthy'
+  /**
+   * EPA AQI 301 and above, "Hazardous" (health warning of emergency conditions). Scores into
+   * red by default and is *still* not a flag: PRD §7.2.2's respiratory flag is SpO₂ < 92 %
+   * and nothing else may claim it.
+   */
+  | 'respiratory.aqi.hazardous';
 
 /** The exact set of PRD §7.2.2 Tier-1 flags. Anything outside this set is advisory
  *  and must never be presented as one of the four specified flags. */
@@ -621,9 +640,18 @@ export type RiskThresholds = {
     readonly maxGapMs: number;
   };
   /**
-   * Environmental amplification (PRD §7.2.3). These produce `envMultiplier` only —
-   * the engine never folds them into `score`, because the fusion layer applies them
-   * and doing it in both places would square the effect.
+   * Environmental inputs (PRD §7.2.3), in two kinds.
+   *
+   * The multiplier fields (`aqiNeutralBelow`, `aqiSevereAbove`, `aqiMaxMultiplier`,
+   * `heatFlagMultiplier`) produce `envMultiplier` only — the engine never folds them into
+   * `score`, because the fusion layer applies them and doing it in both places would square
+   * the effect.
+   *
+   * The advisory fields (`aqiAdvisoryAbove` and the three `aqi*Score`s) are different: they
+   * drive the `respiratory.aqi.*` advisory precursors, which *do* set the respiratory card's
+   * score and level — as `heat.index.extremeCaution` does for heat — while never setting
+   * `flagged`. The two mechanisms are independent: the multiplier is unchanged by the
+   * advisory, and the advisory's score is a configured number, never a multiplied one.
    */
   readonly env: {
     /** AQI at or below which no respiratory amplification applies. */
@@ -632,6 +660,24 @@ export type RiskThresholds = {
     readonly aqiSevereAbove: number;
     /** Respiratory multiplier reached at `aqiSevereAbove`. */
     readonly aqiMaxMultiplier: number;
+    /**
+     * AQI strictly above which the respiratory advisory fires. The band that fires is the
+     * EPA band the value falls in (see `aqi-bands.ts`), so lowering this line extends the
+     * lowest rung downward rather than inventing a new band — which is the hook the later
+     * vulnerable-group personalisation milestone will use.
+     */
+    readonly aqiAdvisoryAbove: number;
+    /** Score for the "Unhealthy" band (AQI 151–200). Amber by default. */
+    readonly aqiUnhealthyScore: number;
+    /** Score for the "Very Unhealthy" band (AQI 201–300). Amber by default. */
+    readonly aqiVeryUnhealthyScore: number;
+    /**
+     * Score for the "Hazardous" band (AQI 301+). Red by default, deliberately — and still
+     * not a flag. `resolveRiskThresholds` keeps the three scores monotone, so worse air can
+     * never score lower, and caps all three at the floor of red (`SCORE_BANDS.red.min`): an
+     * advisory may reach red but never climb it, so an SpO₂ flag always outscores it.
+     */
+    readonly aqiHazardousScore: number;
     /** Cardiovascular amplification while the heat-stress flag is firing — heat
      *  raises cardiac demand, so the same heart rate means more strain. */
     readonly heatFlagMultiplier: number;

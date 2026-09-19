@@ -49,7 +49,10 @@ import {
   type RecommendationLadder,
   type RecommendationRung,
 } from '../rules/recommend';
-import { RESPIRATORY_RECOMMENDATIONS } from '../rules/respiratory';
+import {
+  RESPIRATORY_AQI_RECOMMENDATIONS,
+  RESPIRATORY_RECOMMENDATIONS,
+} from '../rules/respiratory';
 import { CATEGORY_LABELS, levelForScore, SCORE_BANDS } from '../rules/shared';
 import type {
   EnvironmentSnapshot,
@@ -74,13 +77,15 @@ const { dehydration, fatigue, heartRate } = DEFAULT_RISK_THRESHOLDS;
 /**
  * Every ladder the engine ships, named as the card that carries it.
  *
- * Seven entries for six categories: cardiovascular scores upward and downward from different
+ * Eight entries for six categories. Cardiovascular scores upward and downward from different
  * anchors, so one ladder cannot serve both — HR 26 and HR 39 used to share a sentence, which
- * is the defect `recommend.ts`'s header opens with.
+ * is the defect `recommend.ts`'s header opens with. Respiratory is driven by two different
+ * inputs — blood oxygen and the air — and a score of 70 from either needs a different sentence.
  */
 const LADDERS: readonly { readonly name: string; readonly ladder: RecommendationLadder }[] = [
   { name: 'heat', ladder: HEAT_RECOMMENDATIONS },
-  { name: 'respiratory', ladder: RESPIRATORY_RECOMMENDATIONS },
+  { name: 'respiratory (blood oxygen)', ladder: RESPIRATORY_RECOMMENDATIONS },
+  { name: 'respiratory (air quality)', ladder: RESPIRATORY_AQI_RECOMMENDATIONS },
   { name: 'cardiovascular (tachycardia)', ladder: TACHYCARDIA_RECOMMENDATIONS },
   { name: 'cardiovascular (bradycardia)', ladder: BRADYCARDIA_RECOMMENDATIONS },
   { name: 'fall', ladder: FALL_RECOMMENDATIONS },
@@ -139,11 +144,11 @@ describe('TIER_ORDER is the only ranking', () => {
   });
 });
 
-describe('the seven shipped ladders', () => {
-  it('is one per category, plus cardiovascular’s second direction', () => {
+describe('the eight shipped ladders', () => {
+  it('is one per category, plus cardiovascular’s second direction and respiratory’s second input', () => {
     // A seventh category added to the engine without a ladder would ship a card with no
     // guidance at all. This fails here rather than at runtime.
-    expect(LADDERS).toHaveLength(Object.keys(CATEGORY_LABELS).length + 1);
+    expect(LADDERS).toHaveLength(Object.keys(CATEGORY_LABELS).length + 2);
   });
 
   for (const { name, ladder } of LADDERS) {
