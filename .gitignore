@@ -49,3 +49,7 @@ example
 # local debug scratch (screenshots, captured metro stdout)
 /.phc-screens
 /metro-out.log
+.probe.png
+.ui.xml
+*.log
+metro-out.log
