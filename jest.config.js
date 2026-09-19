@@ -33,10 +33,12 @@ module.exports = {
   // assertion was weakened.
   testTimeout: 15000,
 
-  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/'],
+  // `.claude/worktrees/` holds agent worktrees — full checkouts with their own `src/` — which
+  // would otherwise be collected as duplicate suites.
+  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/', '/.claude/'],
   // Generated native build output duplicates package.json files, which confuses
   // the module map.
-  modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/'],
+  modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/', '<rootDir>/.claude/'],
 
   collectCoverageFrom: ['src/**/*.{ts,tsx}', '!src/**/*.d.ts'],
 };
