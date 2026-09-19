@@ -4,6 +4,14 @@ The Dashboard scores a live `SensorReading` buffer when Settings → Sensor sour
 **Android Health Connect**. The default stays **Simulated data**, which is the demo fallback
 PRD §12 asks for.
 
+## Status
+Built · Unit tested (mocked `react-native-health-connect` and `expo-sensors`) · Integration tested
+(screen-level, mocked) — **not device validated**: this feature has never run against a real Health
+Connect instance or real accelerometer. See [`docs/PROJECT_STATUS.md`](../PROJECT_STATUS.md) and
+[`docs/validation/device-validation-plan.md`](../validation/device-validation-plan.md) for the plan
+to close that gap, and [`ADR-004`](../decisions/ADR-004-health-connect-as-sensing-layer.md) for why
+Health Connect was chosen as the sensing layer.
+
 ## Running it
 
 Health Connect is a native module, so Expo Go cannot run this app. Build a development client:
