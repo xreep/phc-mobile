@@ -18,16 +18,15 @@ against a simulated vitals window. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_S
   / `.hazardous`) at EPA AQI 151+ / 201+ / 301+, scoring 40 / 55 / 70 — moves the card's level and
   guidance, never the SpO₂ flag or SOS. Applies only to a weather observation within 60 minutes.
   New thresholds `env.aqiAdvisoryAbove`, `env.aqiUnhealthyScore`, `env.aqiVeryUnhealthyScore`,
-  `env.aqiHazardousScore`. `envMultiplier` unchanged. (`feat/aqi-respiratory-advisory`, PR open,
-  not merged.) See `docs/features/aqi-respiratory-advisory.md`.
+  `env.aqiHazardousScore`. `envMultiplier` unchanged. (PR #6, merged.) See `docs/features/aqi-respiratory-advisory.md`.
 - Local notifications when a risk category rises to elevated/high or a critical trigger appears
   (`src/alerts/`, `src/hooks/use-alerts.ts`), with a new "Alerts" section and toggle in Settings.
-  Foreground-only. (`feat/alert-notifications`, PR open, not merged.) See
+  Foreground-only. (PR #8, merged.) See
   `docs/features/notifications.md`.
 - User profile ("About you" in Settings): age band, chronic condition, outdoor worker, and
   pregnant status, captured locally and validated on read. Currently a no-op for risk
   assessment — see ADR-005; personalised thresholds are a future, separately reviewed milestone.
-  (`feat/user-profile`, PR open, not merged.) See `docs/features/user-profile.md`.
+  (PR #7, merged.) See `docs/features/user-profile.md`.
 
 ### Removed
 - Unused `create-expo-app` template leftovers (`external-link`, `web-badge`, `hint-row`,
