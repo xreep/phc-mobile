@@ -120,6 +120,24 @@ export function interpolateScore(
   return fromScore + clamped * (toScore - fromScore);
 }
 
+/**
+ * Whether a weather observation is older than `maxStaleMs` at `now`.
+ *
+ * One definition, shared by every rule that reads the environment, so a single snapshot can
+ * never be fresh enough for one rule and too old for another. An observation with no
+ * `observedAt` is treated as current: the field is optional on `EnvironmentSnapshot`, and
+ * refusing to assess weather that carries no timestamp would silently disable every
+ * environmental rule for a caller that forgot one.
+ */
+export function isEnvironmentStale(
+  environment: EnvironmentSnapshot | null,
+  now: number,
+  maxStaleMs: number,
+): boolean {
+  const observedAt = environment?.observedAt;
+  return observedAt !== undefined && Number.isFinite(observedAt) && now - observedAt > maxStaleMs;
+}
+
 /** Clamp into the reportable range. Scores are compared, not displayed, so they are
  *  not rounded — rounding could nudge a value across a band edge. */
 export function clampScore(score: number): number {

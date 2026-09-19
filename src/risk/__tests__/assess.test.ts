@@ -674,12 +674,28 @@ describe('combined and critical cases', () => {
 
   it('reports the environmental multiplier without folding it into the score', () => {
     // Fusion applies it; the engine only reports it. Applying it in both places would
-    // square the effect.
-    const clean = assess(healthySeries(), { tempC: 24, humidity: 50, aqi: 40 });
-    const polluted = assess(healthySeries(), { tempC: 24, humidity: 50, aqi: 300 });
+    // square the effect. SpO₂ 94 % scores inside green rather than at 0, so a multiplied
+    // score would be visible here rather than hiding as 0 × anything.
+    const declining = series({ count: 6, everyMs: MINUTE, endingAt: at(0), hr: 72, spo2: 94 });
+    const clean = assess(declining, { tempC: 24, humidity: 50, aqi: 40 });
+    const hazy = assess(declining, { tempC: 24, humidity: 50, aqi: 120 });
+    const polluted = assess(declining, { tempC: 24, humidity: 50, aqi: 300 });
+
+    expect(clean.byCategory.respiratory.score).toBeGreaterThan(0);
     expect(clean.byCategory.respiratory.envMultiplier).toBe(1);
+    // Below the advisory line the multiplier is the only thing that moves.
+    expect(hazy.byCategory.respiratory.envMultiplier).toBeCloseTo(1.03, 5);
+    expect(hazy.byCategory.respiratory.score).toBe(clean.byCategory.respiratory.score);
+    // Above it the *advisory* sets the score (see `aqi-advisory.test.ts`) — a configured
+    // number for the band, never the SpO₂ score times the multiplier.
     expect(polluted.byCategory.respiratory.envMultiplier).toBeCloseTo(1.3, 5);
-    expect(polluted.byCategory.respiratory.score).toBe(clean.byCategory.respiratory.score);
+    expect(polluted.byCategory.respiratory.score).toBe(
+      DEFAULT_RISK_THRESHOLDS.env.aqiVeryUnhealthyScore,
+    );
+    expect(polluted.byCategory.respiratory.score).not.toBeCloseTo(
+      clean.byCategory.respiratory.score * 1.3,
+      5,
+    );
     // Air quality alone must never manufacture a respiratory flag.
     expect(polluted.byCategory.respiratory.flagged).toBe(false);
   });
@@ -821,6 +837,9 @@ describe('no rule can report a flag and a level that disagree', () => {
     ['comfortable', COMFORTABLE],
     ['danger', envAtHeatIndexF(103)],
     ['extreme', envAtHeatIndexF(130)],
+    // Hazardous air: the one advisory that reaches red without a flag, so every invariant
+    // below runs against a red respiratory card whose `flagged` is false.
+    ['hazardous air', { ...COMFORTABLE, aqi: 350 }],
   ];
 
   /** Impact then five still readings — the one shape that confirms a fall. */

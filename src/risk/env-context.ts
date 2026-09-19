@@ -35,9 +35,16 @@ export const ENV_CONTEXT_LABEL = 'Environmental context';
  * Names both `score` and `level`, because the card shows the level as a word ("Caution") and
  * the score only indirectly — a disclaimer that mentioned just the score would leave the
  * colored pill looking like the thing the multiplier had moved.
+ *
+ * It disclaims *this weighting*, not air quality as a whole. The sentence used to end "which
+ * come from your body readings alone", and that stopped being true when the respiratory rule
+ * grew its air-quality advisory (`respiratory.aqi.*`): above `env.aqiAdvisoryAbove` the card's
+ * level does follow the air — through a configured advisory score named on the metric line,
+ * never through this percentage. The percentage is still reported and still not applied, and
+ * that is the only claim the sentence makes now.
  */
 export const ENV_CONTEXT_DISCLAIMER =
-  'Environmental context only — it is not included in the score or status above, which come from your body readings alone.';
+  'Environmental context only — this weighting is not included in the score or status above.';
 
 export type EnvironmentalContext = {
   /** Which environmental input this came from, in the reader's words. */

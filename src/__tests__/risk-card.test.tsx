@@ -8,11 +8,18 @@
  *
  * A UI test cannot check that sentence by looking at itself. So the block below does not build a
  * fixture: it runs the real engine over two windows that differ **only** in AQI, renders the real
- * card for each, and asserts three things at once — the block appears on the polluted one, the
+ * card for each, and asserts three things at once — the block appears on the hazier one, the
  * score and the status word are identical across the pair, and the disclaimer that says exactly
  * that is on screen. If someone later folds `envMultiplier` into `score` (the option E5
  * rejected), the scores diverge and this fails, which is the point: the label and the arithmetic
  * are pinned together in one assertion rather than in two files that can drift.
+ *
+ * The pair has to stay *below* the air-quality advisory line (`env.aqiAdvisoryAbove`, 150).
+ * Above it the respiratory rule's `respiratory.aqi.*` advisory does move the card — through a
+ * configured score, not through the multiplier — so an AQI-300 pair would show a divergence
+ * that is not the leak this file guards against. That case gets its own test, which pins that
+ * the movement is the advisory's number and that the disclaimer still tells the truth about the
+ * weighting beside it.
  */
 
 import { render } from '@testing-library/react-native';
@@ -21,6 +28,7 @@ import { RiskCard } from '@/components/risk-card';
 import type { RiskCategory } from '@/constants/health-data';
 import {
   assessRisk,
+  DEFAULT_RISK_THRESHOLDS,
   fahrenheitToCelsius,
   ENV_CONTEXT_DISCLAIMER,
   type EnvironmentSnapshot,
@@ -29,7 +37,12 @@ import { at, healthySeries, MINUTE, series } from '@/risk/__tests__/fixtures';
 
 /** Clean air and comfortable heat: the control for every pair below. */
 const CLEAN: EnvironmentSnapshot = { tempC: 24, humidity: 50, aqi: 40 };
-/** Same weather, hazardous air. Only `aqi` differs, so only `envMultiplier` may differ. */
+/**
+ * Same weather, poor air that stays below the advisory line. Only `aqi` differs, and it is not
+ * high enough for the advisory, so only `envMultiplier` may differ (1.06 — a visible "+6%").
+ */
+const HAZY: EnvironmentSnapshot = { tempC: 24, humidity: 50, aqi: 140 };
+/** Same weather, air bad enough for the advisory as well as the full multiplier. */
 const POLLUTED: EnvironmentSnapshot = { tempC: 24, humidity: 50, aqi: 300 };
 
 /**
@@ -73,35 +86,60 @@ describe('the environmental context block', () => {
     expect(queryByText(ENV_CONTEXT_DISCLAIMER)).toBeNull();
   });
 
-  it('tells the truth: the score and the status word do not move when the multiplier does', async () => {
+  it('tells the truth: the score and the status word do not move when only the multiplier does', async () => {
     // The assertion the disclaimer's honesty rests on. Same readings, same weather, different
-    // AQI — the multiplier changes, the verdict must not. AQI reaches nothing else in the engine
-    // (it appears only inside `airQualityMultiplier`), so any divergence here is the multiplier
-    // leaking into the score.
+    // AQI — the multiplier changes, the verdict must not. Below the advisory line AQI reaches
+    // nothing else in the engine (it appears only inside `airQualityMultiplier`), so any
+    // divergence here is the multiplier leaking into the score.
     const clean = respiratoryUnder(CLEAN);
-    const polluted = respiratoryUnder(POLLUTED);
+    const hazy = respiratoryUnder(HAZY);
 
     // Without this the rest is vacuous — see `borderlineSeries` on why zero would pass anyway.
     expect(clean.score).toBeGreaterThan(0);
 
-    expect(polluted.envMultiplier).toBeGreaterThan(clean.envMultiplier);
-    expect(polluted.score).toBe(clean.score);
-    expect(polluted.level).toBe(clean.level);
-    expect(polluted.tier).toBe(clean.tier);
-    expect(polluted.guidance).toBe(clean.guidance);
-    expect(polluted.flagged).toBe(clean.flagged);
+    expect(hazy.envMultiplier).toBeGreaterThan(clean.envMultiplier);
+    expect(hazy.score).toBe(clean.score);
+    expect(hazy.level).toBe(clean.level);
+    expect(hazy.tier).toBe(clean.tier);
+    expect(hazy.guidance).toBe(clean.guidance);
+    expect(hazy.flagged).toBe(clean.flagged);
+    expect(hazy.rule).toBeNull();
 
     // And the same through the rendered card, which is where the user meets the claim: the status
-    // word and the metric line are identical on both, while only the polluted one carries the
+    // word and the metric line are identical on both, while only the hazy one carries the
     // context block.
     const cleanCard = await render(<RiskCard category={clean} />);
     expect(cleanCard.getByText('Normal')).toBeTruthy();
     expect(cleanCard.getByText(clean.metric)).toBeTruthy();
     await cleanCard.unmount();
 
+    const hazyCard = await render(<RiskCard category={hazy} />);
+    expect(hazyCard.getByText('Normal')).toBeTruthy();
+    expect(hazyCard.getByText(clean.metric)).toBeTruthy();
+    expect(hazyCard.getByText('Air quality +6%')).toBeTruthy();
+    expect(hazyCard.getByText(ENV_CONTEXT_DISCLAIMER)).toBeTruthy();
+  });
+
+  it('and when the air is bad enough to move the card, it moves by the advisory, not the weighting', async () => {
+    // AQI 300 is EPA "Very Unhealthy": the respiratory advisory sets the card's score to its
+    // configured amber number. That number is not the SpO₂ score times the multiplier — the
+    // weighting beside it is still reported and still not applied, which is what the disclaimer
+    // on this same card claims.
+    const clean = respiratoryUnder(CLEAN);
+    const polluted = respiratoryUnder(POLLUTED);
+
+    expect(polluted.envMultiplier).toBeCloseTo(1.3, 5);
+    expect(polluted.rule).toBe('respiratory.aqi.veryUnhealthy');
+    expect(polluted.score).toBe(DEFAULT_RISK_THRESHOLDS.env.aqiVeryUnhealthyScore);
+    expect(polluted.score).not.toBeCloseTo(clean.score * polluted.envMultiplier, 5);
+    expect(polluted.level).toBe('amber');
+    expect(polluted.flagged).toBe(false);
+
     const pollutedCard = await render(<RiskCard category={polluted} />);
-    expect(pollutedCard.getByText('Normal')).toBeTruthy();
-    expect(pollutedCard.getByText(clean.metric)).toBeTruthy();
+    expect(pollutedCard.getByText('Caution')).toBeTruthy();
+    // The metric line names the input that moved the card, beside the reading that did not.
+    expect(pollutedCard.getByText('SpO₂ 94% · AQI 300 (Very Unhealthy)')).toBeTruthy();
+    expect(pollutedCard.getByText('Air quality +30%')).toBeTruthy();
     expect(pollutedCard.getByText(ENV_CONTEXT_DISCLAIMER)).toBeTruthy();
   });
 

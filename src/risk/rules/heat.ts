@@ -46,6 +46,7 @@ import {
 import {
   clampScore,
   interpolateScore,
+  isEnvironmentStale,
   levelForScore,
   type RuleContext,
   type RuleOutcome,
@@ -256,11 +257,7 @@ export function assessHeat(context: RuleContext): RuleOutcome {
   else if (flagged) firedRules.push('heat.index.danger');
   else if (heatIndexBand.label === 'Extreme Caution') firedRules.push('heat.index.extremeCaution');
 
-  const observedAt = context.environment?.observedAt;
-  const isStale =
-    observedAt !== undefined &&
-    Number.isFinite(observedAt) &&
-    context.now - observedAt > thresholds.env.maxStaleMs;
+  const isStale = isEnvironmentStale(context.environment, context.now, thresholds.env.maxStaleMs);
 
   const dataQuality: DataQuality = isStale ? 'stale' : heatIndexOutOfDomain ? 'partial' : 'ok';
 

@@ -25,6 +25,7 @@
  * `dataQuality` reports when a level rests on thin evidence.
  */
 
+import { SCORE_BANDS } from './rules/shared';
 import type { PartialRiskThresholds, RiskThresholds } from './types';
 
 /** This module is the always-on rule layer. The TFLite model is Tier 2, a later phase. */
@@ -398,6 +399,25 @@ export const DEFAULT_RISK_THRESHOLDS: RiskThresholds = {
     /** DERIVED: 1.3. Deliberately modest: this reports context, and Tier 1 must not
      *  let air quality alone manufacture a respiratory flag. */
     aqiMaxMultiplier: 1.3,
+    /**
+     * DERIVED: 150 — the top of EPA's "Unhealthy for Sensitive Groups" band. From 151 the
+     * published cautionary statement addresses everyone ("Unhealthy"), which is the first
+     * point at which an advisory to a user we know nothing about is defensible. Below it the
+     * general population sees guidance text only — no level change. Lowering this for users
+     * who tell us they have asthma or heart disease is the personalisation milestone, not a
+     * retune of this default.
+     */
+    aqiAdvisoryAbove: 150,
+    /**
+     * DERIVED: 40 / 55 / 70 — the floor of amber, the middle of amber, and the floor of red
+     * (`SCORE_BANDS`). Each is also the floor of the matching rung in
+     * `RESPIRATORY_AQI_RECOMMENDATIONS`, so the wording under the card names the band the
+     * score came from; `aqi-advisory.test.ts` pins that pairing. Hazardous reaching red is
+     * deliberate — EPA calls it "emergency conditions" — and it is still not a flag.
+     */
+    aqiUnhealthyScore: 40,
+    aqiVeryUnhealthyScore: 55,
+    aqiHazardousScore: 70,
     /** DERIVED: 1.2. Heat raises cardiac demand, so the same heart rate represents
      *  more strain (PRD §7.2.3). Reported for fusion, never folded into `score`. */
     heatFlagMultiplier: 1.2,
@@ -508,9 +528,43 @@ export function resolveRiskThresholds(overrides?: PartialRiskThresholds): RiskTh
       plausible,
     ),
     window: resolvedWindow,
-    env: mergeGroup(base.env, overrides.env),
+    env: repairEnv(mergeGroup(base.env, overrides.env)),
     plausible,
   };
+}
+
+/**
+ * Highest score an air-quality advisory may carry: the floor of red.
+ *
+ * An advisory can reach red and never climb it — climbing red is for PRD §7.2.2 flags. This is
+ * what lets the respiratory rule choose its guidance by the *driving rule*: whenever an SpO₂
+ * rule fires its score is at least 70, so it is at least any advisory score, and the card's
+ * wording is always about the input that set its score. Without the cap an override could
+ * put "blood oxygen is critically low" under a level the air had set.
+ */
+const AQI_ADVISORY_SCORE_CEILING = SCORE_BANDS.red.min;
+
+/**
+ * Sixth instance of the trap, in the air-quality advisory, in two forms. Three band scores
+ * that are not monotone would make worse air score *lower*, silently — repaired upward, the
+ * same way `severeRiseBpm` is held at or above `riseBpm`. And a score above
+ * {@link AQI_ADVISORY_SCORE_CEILING} would let an advisory outrank the flag that is presented
+ * ahead of it — clamped down. Returns the same object when nothing needs repairing, so an
+ * untouched config keeps its identity.
+ */
+function repairEnv(group: RiskThresholds['env']): RiskThresholds['env'] {
+  const cap = (score: number): number => Math.min(AQI_ADVISORY_SCORE_CEILING, Math.max(0, score));
+  const aqiUnhealthyScore = cap(group.aqiUnhealthyScore);
+  const aqiVeryUnhealthyScore = cap(Math.max(group.aqiVeryUnhealthyScore, aqiUnhealthyScore));
+  const aqiHazardousScore = cap(Math.max(group.aqiHazardousScore, aqiVeryUnhealthyScore));
+  if (
+    aqiUnhealthyScore === group.aqiUnhealthyScore &&
+    aqiVeryUnhealthyScore === group.aqiVeryUnhealthyScore &&
+    aqiHazardousScore === group.aqiHazardousScore
+  ) {
+    return group;
+  }
+  return { ...group, aqiUnhealthyScore, aqiVeryUnhealthyScore, aqiHazardousScore };
 }
 
 /**
