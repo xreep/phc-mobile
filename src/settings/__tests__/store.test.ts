@@ -89,6 +89,12 @@ describe('defaults', () => {
     expect(DEFAULT_SETTINGS.sharing.cloud_backup).toBe(false);
     expect(DEFAULT_SETTINGS.sharing.family_share).toBe(false);
   });
+
+  it('enables alert notifications by default', () => {
+    // A red card nobody is looking at is not an early warning (M3 alerts) — the feature only
+    // does its job if it is on for a user who never opens Settings.
+    expect(DEFAULT_SETTINGS.alerts).toEqual({ enabled: true });
+  });
 });
 
 describe('readSettings — validating what a previous build left behind', () => {
@@ -99,6 +105,7 @@ describe('readSettings — validating what a previous build left behind', () => 
       sharing: { sos: true, anon_aggregate: true, cloud_backup: false, family_share: false },
       sensorSource: 'ble_esp32',
       profile: { ageBand: '60plus', chronicCondition: true, outdoorWorker: false, pregnant: false },
+      alerts: { enabled: false },
     };
 
     expect(await writeSettings(settings)).toBe(true);
@@ -131,6 +138,28 @@ describe('readSettings — validating what a previous build left behind', () => 
       const settings = await readSettings();
       expect(settings.profile).toEqual(DEFAULT_PROFILE);
       expect(settings.userName).toBe('Asha');
+    }
+  });
+
+  it('defaults alerts to enabled when a previous build never wrote the field', () => {
+    // The field did not exist before this feature. An old blob missing it must not read as
+    // "the user turned notifications off" — that was never a choice they made.
+    return seed(JSON.stringify({ userName: 'Asha' })).then(async () => {
+      const settings = await readSettings();
+      expect(settings.alerts).toEqual({ enabled: true });
+    });
+  });
+
+  it('honours a stored alerts.enabled: false', async () => {
+    await seed(JSON.stringify({ alerts: { enabled: false } }));
+
+    await expect(readSettings()).resolves.toMatchObject({ alerts: { enabled: false } });
+  });
+
+  it('falls back to the default when the stored alerts block is unreadable', async () => {
+    for (const alerts of [null, 'nope', 42, { enabled: 'yes' }, {}]) {
+      await seed(JSON.stringify({ alerts }));
+      await expect(readSettings()).resolves.toMatchObject({ alerts: { enabled: true } });
     }
   });
 

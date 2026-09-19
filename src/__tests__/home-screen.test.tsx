@@ -31,6 +31,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { AlertsProvider } from '@/alerts/provider';
 import HomeScreen from '@/app/index';
 import { buildMockReadings } from '@/constants/mock-sensor-window';
 import { fetchLiveEnvironment, readCachedEnvironment, type LiveEnvironment } from '@/environment';
@@ -126,7 +127,13 @@ function renderHome() {
             documented defaults: no contacts, SOS opt-in on. */}
         <SettingsProvider>
           <SensorProvider>
-            <HomeScreen />
+            {/* `useAlerts` (inside `HomeScreen`) reads the shared permission from here — see
+                `@/alerts/provider`'s module doc. The global `expo-notifications` mock leaves
+                permission 'undetermined', so this suite's assertions are unaffected: no
+                delivery, exactly as before this provider existed. */}
+            <AlertsProvider>
+              <HomeScreen />
+            </AlertsProvider>
           </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>

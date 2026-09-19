@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme } from 'react-native';
 
+import { AlertsProvider } from '@/alerts/provider';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
 import { EnvironmentProvider } from '@/environment/provider';
@@ -24,8 +25,14 @@ export default function TabLayout() {
           {/* Inside Settings because the picker there is what switches the feed on; the
               Dashboard's risk engine and Settings then agree on which source is live. */}
           <SensorProvider>
-            <AnimatedSplashOverlay />
-            <AppTabs />
+            {/* Also inside Settings: it reads the "Alert notifications" toggle to decide when to
+                re-read the OS permission (`@/alerts/provider`'s module doc), and it is the one
+                shared permission both the Settings screen and the Dashboard's `useAlerts` read —
+                two independent copies is the bug this file exists to prevent. */}
+            <AlertsProvider>
+              <AnimatedSplashOverlay />
+              <AppTabs />
+            </AlertsProvider>
           </SensorProvider>
         </SettingsProvider>
       </EnvironmentProvider>

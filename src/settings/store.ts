@@ -42,6 +42,13 @@ export const SETTINGS_KEY = 'phc.settings.v1';
 
 export type SharingPrefs = Readonly<Record<DataSharingPref['key'], boolean>>;
 
+/** M3 alerts (workstream G): local notifications on a risk-level change. A record rather than a
+ *  bare boolean so a later per-category mute or quiet-hours setting has somewhere to live
+ *  without another top-level `PersistedSettings` field and another schema-version bump. */
+export type AlertPrefs = {
+  readonly enabled: boolean;
+};
+
 export type PersistedSettings = {
   /** Empty until the user adds someone. See the module note on why nothing is seeded. */
   readonly contacts: readonly EmergencyContact[];
@@ -54,11 +61,18 @@ export type PersistedSettings = {
    * ADR-005. Nothing downstream of this field currently changes behaviour based on it.
    */
   readonly profile: UserProfile;
+  readonly alerts: AlertPrefs;
 };
 
 const DEFAULT_SHARING: SharingPrefs = Object.freeze(
   Object.fromEntries(DATA_SHARING_PREFS.map((pref) => [pref.key, pref.defaultOn])),
 ) as SharingPrefs;
+
+/** On by default: a red card nobody is looking at is not an early warning, and a feature that
+ *  ships silent-until-opted-in mostly ships unused. Unlike `sharing`, nothing here sends data
+ *  anywhere — see `docs/features/notifications.md` — so the "off unless earned" reasoning the
+ *  module header gives for sharing prefs does not apply. */
+const DEFAULT_ALERTS: AlertPrefs = Object.freeze({ enabled: true });
 
 export const DEFAULT_SETTINGS: PersistedSettings = Object.freeze({
   contacts: [],
@@ -66,6 +80,7 @@ export const DEFAULT_SETTINGS: PersistedSettings = Object.freeze({
   sharing: DEFAULT_SHARING,
   sensorSource: DEFAULT_SENSOR_SOURCE,
   profile: DEFAULT_PROFILE,
+  alerts: DEFAULT_ALERTS,
 });
 
 const SHARING_KEYS = new Set<string>(DATA_SHARING_PREFS.map((pref) => pref.key));
@@ -115,6 +130,15 @@ function parseSharing(value: unknown): SharingPrefs {
   return merged as SharingPrefs;
 }
 
+/** Absent (a pre-M3 blob), the wrong shape, or a non-boolean `enabled` all fall back to the
+ *  documented default (`true`) rather than reading as an explicit opt-out — see
+ *  {@link DEFAULT_ALERTS}. Only a *real* stored `false` turns notifications off. */
+function parseAlerts(value: unknown): AlertPrefs {
+  if (typeof value !== 'object' || value === null) return DEFAULT_ALERTS;
+  const record = value as Record<string, unknown>;
+  return typeof record.enabled === 'boolean' ? { enabled: record.enabled } : DEFAULT_ALERTS;
+}
+
 function parseSettings(value: unknown): PersistedSettings {
   if (typeof value !== 'object' || value === null) return DEFAULT_SETTINGS;
   const record = value as Record<string, unknown>;
@@ -136,6 +160,7 @@ function parseSettings(value: unknown): PersistedSettings {
     // Missing on any blob written before this field existed; `parseProfile` already treats
     // that the same as an explicit `undefined`, so no extra branch is needed here.
     profile: parseProfile(record.profile),
+    alerts: parseAlerts(record.alerts),
   };
 }
 
