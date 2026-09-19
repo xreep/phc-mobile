@@ -101,3 +101,39 @@ Community screen's real aggregation logic previews this shape but is fed by a ha
 today, labelled "Concept demonstration." No government API integration exists; official IMD/NDMA/CPCB
 feeds are deliberately not faked.
 **Evidence:** `src/community/aggregate.ts` (k-anonymity floor); audit §F ("What we should NOT build" — live official-feed integration without access).
+
+### "Does air quality affect the risk score?"
+**Honest answer today:** On the reviewed, unmerged `feat/aqi-respiratory-advisory` branch, yes, in
+two ways. Above EPA AQI 150 ("Unhealthy") the respiratory card raises an advisory — amber at
+151–300, red at 301+ — with air-quality guidance, and the metric line shows the AQI and its EPA
+band beside the SpO₂ reading. It is an advisory, not the PRD respiratory flag: only SpO₂ < 92%
+flags, and only SpO₂ can trigger SOS — **the AQI advisory never triggers SOS**. Separately the
+engine reports a respiratory weighting (up to +30% at AQI 300) that is deliberately not applied to
+the score — it is there for a future fusion layer. On `master` today (before this PR merges) AQI is
+fetched and displayed on the Environment screen only; the answer there is "not yet."
+**Evidence:** `src/risk/rules/respiratory.ts`, `src/risk/__tests__/aqi-advisory.test.ts` (branch
+`feat/aqi-respiratory-advisory`).
+**What changes after personalisation:** users who opt in as sensitive get the advisory from AQI 101
+(a later, human-reviewed milestone).
+
+### "Does the app notify you if a risk goes critical while you're not looking at it?"
+**Honest answer today:** On the reviewed, unmerged `feat/alert-notifications` branch, yes,
+foreground-only for now. A rise into elevated/high risk, or a critical trigger such as a possible
+fall, raises a local Android notification while the app is open in the background — never on the
+demo/simulated data, only on live Health Connect readings, and only if the "Alert notifications"
+toggle in Settings is on. It reuses the exact same rule engine that drives the Dashboard cards, so
+the notification and the card can never disagree. **Notifications are foreground-only** until the
+background foreground-service milestone (`docs/ROADMAP.md` M8) — nothing fires once the app is
+fully closed. Not yet device-validated, and not yet on `master`.
+**Evidence:** `src/alerts/`, `src/hooks/use-alerts.ts` (branch `feat/alert-notifications`).
+
+### "Does the app know who I am, health-wise — age, conditions, whether I work outdoors?"
+**Honest answer today:** On the reviewed, unmerged `feat/user-profile` branch, Settings has an
+"About you" section for age band, a long-term condition flag, outdoor-worker status, and
+pregnancy. It is stored only on the device and is never sent anywhere, including in an SOS alert.
+It does not yet change any risk warning: that is a deliberate, documented decision (ADR-005)
+requiring a methodology review before it ships, so this milestone only captures the profile as an
+input for that future review. A regression test proves the risk engine's output is identical with
+or without a filled-in profile today.
+**Evidence:** `src/settings/profile.ts`, `src/__tests__/home-screen.test.tsx` (branch
+`feat/user-profile`); `docs/decisions/ADR-005-personalisation-inputs-before-thresholds.md`.

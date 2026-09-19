@@ -14,12 +14,32 @@ against a simulated vitals window. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_S
 - `.gitattributes` (LF normalisation) and CI (typecheck, lint, test on every push and PR to `master`).
 - This documentation tree (`docs/PROJECT_STATUS.md`, `docs/BUILD_MATRIX.md`, `docs/ROADMAP.md`,
   `docs/JUDGE_QA.md`, architecture/security/testing/validation docs, ADRs).
+- Respiratory rule: air-quality advisory precursor (`respiratory.aqi.unhealthy` / `.veryUnhealthy`
+  / `.hazardous`) at EPA AQI 151+ / 201+ / 301+, scoring 40 / 55 / 70 — moves the card's level and
+  guidance, never the SpO₂ flag or SOS. Applies only to a weather observation within 60 minutes.
+  New thresholds `env.aqiAdvisoryAbove`, `env.aqiUnhealthyScore`, `env.aqiVeryUnhealthyScore`,
+  `env.aqiHazardousScore`. `envMultiplier` unchanged. (`feat/aqi-respiratory-advisory`, PR open,
+  not merged.) See `docs/features/aqi-respiratory-advisory.md`.
+- Local notifications when a risk category rises to elevated/high or a critical trigger appears
+  (`src/alerts/`, `src/hooks/use-alerts.ts`), with a new "Alerts" section and toggle in Settings.
+  Foreground-only. (`feat/alert-notifications`, PR open, not merged.) See
+  `docs/features/notifications.md`.
+- User profile ("About you" in Settings): age band, chronic condition, outdoor worker, and
+  pregnant status, captured locally and validated on read. Currently a no-op for risk
+  assessment — see ADR-005; personalised thresholds are a future, separately reviewed milestone.
+  (`feat/user-profile`, PR open, not merged.) See `docs/features/user-profile.md`.
 
 ### Removed
 - Unused `create-expo-app` template leftovers (`external-link`, `web-badge`, `hint-row`,
   `ui/collapsible`) and `scripts/reset-project.js`.
 
-**Known limitations:** repository hygiene and documentation only — no application behaviour changed.
+**Validation:** unit/integration tests only (Jest); nothing device validated.
+**Known limitations:** none of the three feature entries above have merged to `master` yet (each
+is an open, reviewed PR); none has run on a device. The AQI advisory's colour disagreement with the
+Environment screen, its band/score numbers, and its guidance wording are pending human
+(health-methodology) sign-off — see `docs/PROJECT_STATUS.md` "Decisions awaiting human sign-off".
+Notifications are foreground-only. The user profile does not yet affect any risk threshold
+(ADR-005).
 
 ## [0.2.0] — 2026-09-15
 

@@ -22,17 +22,17 @@ Blocked**. No accuracy, false-positive, or battery figures are included — none
 | Health Connect adapter (permissions, I/O) | ✅ | ✅ | ❌ | ❌ | Unit tested (mocked native module) |
 | Environment / weather (OpenWeatherMap) | ✅ | ✅ | 🟡 | ❌ | Live weather seen working on the August APK (simulated vitals); not a full device validation pass |
 | AQI display (Environment screen) | ✅ | ✅ | ❌ | ❌ | Unit tested |
-| AQI → risk (respiratory `envMultiplier`) | ❌ | ❌ | ❌ | ❌ | Planned (P0) |
+| AQI → risk (respiratory `envMultiplier` + advisory) | ✅ | ✅ | ❌ | ❌ | Integration tested — in PR (`feat/aqi-respiratory-advisory`, not merged) |
 | Personal baselines (10-min rolling mean) | 🟡 | ✅ | ❌ | ❌ | Unit tested; partial — not a day/week baseline |
 | Reading persistence (SQLite) | ❌ | ❌ | ❌ | ❌ | Planned (P1) |
 | Trends screen | 🟡 | ✅ | ❌ | ❌ | Mock-demo — renders hardcoded `TRENDS` constants |
-| Local notifications | ❌ | ❌ | ❌ | ❌ | Planned (P0) |
+| Local notifications | ✅ | ✅ | ❌ | ❌ | Integration tested — in PR (`feat/alert-notifications`, not merged; foreground-only) |
 | Background sensing | ❌ | ❌ | ❌ | ❌ | Planned (P1) — polling and accelerometer fold stop when backgrounded |
 | SOS flow (state machine, cancel window) | ✅ | ✅ | ❌ | ❌ | Unit/integration tested |
 | SMS relay (Twilio) | ✅ | ✅ | ❌ | ❌ | Unit tested; relay not deployed |
 | SMS composer fallback | ✅ | ✅ | ❌ | ❌ | Unit tested |
 | Offline operation (engine + cached env) | ✅ | ✅ | ❌ | ❌ | Unit tested; airplane-mode SOS flow not run on a device |
-| Personalisation (user profile / vulnerability tier) | ❌ | ❌ | ❌ | ❌ | Planned (P1) |
+| Personalisation (user profile / vulnerability tier) | ✅ | ✅ | ❌ | ❌ | Integration tested — in PR (`feat/user-profile`, not merged; capture only — proven no-op for risk thresholds, ADR-005) |
 | Tier-2 on-device anomaly score | ❌ | ❌ | ❌ | ❌ | Planned (P1) — no ML in this build |
 | Community aggregate (k-anonymity) | 🟡 | ✅ | ❌ | ❌ | Mock-demo — real aggregation logic, hardcoded demo cohort |
 | Preparedness advisories (flood/cyclone) | ✅ | ✅ | ❌ | ❌ | Unit tested; static, not weather-triggered |

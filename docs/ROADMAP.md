@@ -31,8 +31,18 @@ Android 14 and 15; grant/deny each permission; confirm whether `SkinTemperature`
 ### M3 — AQI wired into risk
 `EnvironmentSnapshot.aqi` feeds the respiratory rule's `envMultiplier` and an advisory rule at Unhealthy+. Gate: tests pin the EPA band boundaries; Environment and Dashboard agree.
 
+**Status: implemented, awaiting device validation.** Built on `feat/aqi-respiratory-advisory` (PR
+open, reviewed, not merged) — see `docs/features/aqi-respiratory-advisory.md`. The band-boundary
+gate is met by unit tests; the "Environment and Dashboard agree" gate is met for the EPA *label*
+only, not the *colour* (Environment: red at 151+; Dashboard card: amber at the same AQI), which is
+a pending product decision — see `docs/PROJECT_STATUS.md` "Decisions awaiting human sign-off".
+
 ### M4 — Local notifications
 `expo-notifications` fires on risk-level change (amber→red) and on any critical rule, debounced per category. Gate: verified on a locked phone.
+
+**Status: implemented, awaiting device validation.** Built on `feat/alert-notifications` (PR open,
+reviewed, not merged) — see `docs/features/notifications.md`. Foreground-only today; the "verified
+on a locked phone" gate is unmet (no device validation yet).
 
 ### M5 — Twilio relay deployed
 End-to-end SMS test. Gate: SMS with vitals + maps link received on a second phone; airplane-mode composer fallback recorded.
@@ -48,6 +58,14 @@ Android foreground service runs polling + accelerometer fold with the screen off
 
 ### M9 — User profile and vulnerability tier
 Age band, chronic-condition flag, outdoor-worker flag adjust thresholds and notification urgency. Gate: a profile with no flags reproduces today's outputs exactly (regression test).
+
+**Status: profile capture done; threshold personalisation pending sign-off.** The capture half
+(age band, chronic condition, outdoor worker, pregnant — Settings "About you") is built on
+`feat/user-profile` (PR open, reviewed, not merged) — see `docs/features/user-profile.md`. The
+regression gate above is already met by a dedicated test (a filled-in profile reproduces identical
+Dashboard output). The threshold/notification-urgency half of this milestone is explicitly deferred
+per ADR-005 pending a health-methodology review — see `docs/PROJECT_STATUS.md` "Decisions awaiting
+human sign-off".
 
 ### M10 — 7-day personal baselines + Tier-2 anomaly score
 Baselines from the store feed cardiovascular/fatigue rules; an explainable statistical anomaly score (EWMA/z-score against the user's own history) fuses into the engine. Gate: score is explainable in the card ("HR is 2.4σ above your usual at rest"); a written validation note accompanies it — no TFLite unless it earns its place over the statistical baseline.
