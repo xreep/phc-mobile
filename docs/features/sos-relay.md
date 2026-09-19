@@ -4,6 +4,13 @@ The app's primary SOS path POSTs to a serverless function that you deploy and ow
 holds Twilio credentials — it knows one URL and nothing else. This document is the contract and a
 working reference implementation.
 
+## Status
+Built · Unit tested · Integration tested (state machine, message composition, delivery fallback
+logic) — **not device validated**: no test in this repository has exercised a real deployed relay,
+and `EXPO_PUBLIC_TWILIO_SOS_URL` is currently unset, so every SOS today would take the native SMS
+composer fallback path. See [`docs/PROJECT_STATUS.md`](../PROJECT_STATUS.md) and
+[`ADR-003`](../decisions/ADR-003-sos-relay.md) for why the relay is architected this way.
+
 ## Why the indirection exists
 
 A Twilio Account SID and Auth Token in the app would be extractable from any installed copy: an
