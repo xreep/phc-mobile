@@ -294,7 +294,10 @@ describe('profile is a no-op for the risk engine', () => {
     // vulnerable profile seeded ahead of render. Any difference here would mean the profile
     // reached the engine.
     expect(getByText('Alert')).toBeTruthy(); // heat → red, exactly as with the default profile
-    expect(getAllByText('Normal')).toHaveLength(5);
+    // Respiratory → amber from the fixture's AQI 168 advisory, as in the default-profile test.
+    expect(getByText('Caution')).toBeTruthy();
+    expect(getByText('SpO₂ 97% · AQI 168 (Unhealthy)')).toBeTruthy();
+    expect(getAllByText('Normal')).toHaveLength(4);
     expect(getByText('Heat index 56°C')).toBeTruthy();
     expect(
       getByText('Extreme heat danger — get indoors or into shade and cool down now.'),
