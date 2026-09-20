@@ -25,7 +25,9 @@
       "permissions": [
         "android.permission.health.READ_HEART_RATE",
         "android.permission.health.READ_OXYGEN_SATURATION",
-        "android.permission.health.READ_SKIN_TEMPERATURE"
+        "android.permission.health.READ_SKIN_TEMPERATURE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -70,6 +72,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "dae4a187-7228-4d77-904c-95df575651ea"
+      }
+    },
+    "owner": "xreeps-team"
   }
 }
