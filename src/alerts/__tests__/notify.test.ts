@@ -36,6 +36,25 @@ beforeEach(() => {
 });
 
 describe('ensureAlertChannels', () => {
+  it('registers a foreground handler that shows the banner and shade entry', async () => {
+    // Found on the first Android 15 device run: without a handler, expo-notifications drops
+    // any notification that arrives while the app is open — and every alert does, because
+    // sensing is foreground-only. The planner's intents were "delivered" and never shown.
+    const mockedSetHandler = jest.mocked(Notifications.setNotificationHandler);
+    mockedSetHandler.mockClear();
+
+    await ensureAlertChannels();
+
+    expect(mockedSetHandler).toHaveBeenCalledTimes(1);
+    const handler = mockedSetHandler.mock.calls[0][0]?.handleNotification;
+    expect(handler).toBeDefined();
+    await expect(handler!({} as never)).resolves.toMatchObject({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: false,
+    });
+  });
+
   it('creates the standard channel at HIGH importance', async () => {
     await ensureAlertChannels();
 

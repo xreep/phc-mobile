@@ -71,19 +71,27 @@ Enable airplane mode on the test phone, then trigger a critical event. Confirm:
 - The Environment screen shows the cached weather with a "cached" badge rather than an error state,
   as long as the cache has not exceeded its 60-minute staleness bound.
 
+
+### Findings from the 2026-09-20 run
+
+- **Live AQI advisory validated incidentally:** local AQI 177 (EPA Unhealthy) turned the Respiratory card *Caution* before any SpO₂ record existed — the advisory precursor merged in PR #6, on real air-quality data.
+- **Notifications bug found and fixed (PR pending):** `expo-notifications` suppresses notifications that arrive while the app is in the foreground unless a handler is registered; with foreground-only sensing every alert fires in the foreground, so none was ever shown. `ensureAlertChannels` now registers a banner+list handler; after the fix the red-respiratory notification appeared on the device.
+- **Notification permission was `denied` on first run** (Android 13+ runtime permission); enabling it from App info → Notifications was picked up on the next foreground without a restart (the provider's AppState re-read).
+- **Toolbox timestamp pitfall:** Toolbox pre-fills the start time when its form is opened; two records were written with 37–41-minute-old timestamps and were (correctly) outside the retention window. Set the time *last*, to the phone's current clock.
+
 ## Results
 
 **Left empty intentionally — fill in only when each step is actually run on a device.**
 
 | Step | Device / OS | Date | Result | Notes |
 | --- | --- | --- | --- | --- |
-| 1. EAS build install | | | | |
-| 2. HC Toolbox — HeartRate | | | | |
-| 2. HC Toolbox — OxygenSaturation critical | | | | |
-| 2. HC Toolbox — SkinTemperature (with baseline) | | | | |
+| 1. EAS build install | Android 15 phone (user's) | 2026-09-20 | ✅ PASS | EAS build `5b4de821` (dev client, cloud keystore). Installed from the artifact link; connected to Metro over tunnel; Dashboard rendered on simulated source. |
+| 2. HC Toolbox — HeartRate | Android 15 | 2026-09-20 | ✅ PASS | `HeartRateSeries` 72 bpm written by Toolbox appeared in the vitals row within one poll; subtitle `Updated 0s ago · Android Health Connect`. A record stamped 41 min earlier was correctly ignored (outside the 20-min retention window). |
+| 2. HC Toolbox — OxygenSaturation critical | Android 15 | 2026-09-20 | 🟡 PARTIAL | SpO₂ 91 % read → Respiratory **Alert** (flag `respiratory.spo2.low`) with metric `SpO₂ 91% · AQI 177 (Unhealthy)`. The *critical* path (< 85 % ×2 → SOS countdown) not yet exercised. |
+| 2. HC Toolbox — SkinTemperature (with baseline) | Android 15 | 2026-09-20 | ⬜ NOT RUN | Permission listed and granted; no record written yet. |
 | 2. HC Toolbox — SkinTemperature (no baseline) | | | | |
 | 3. Compatibility — Android 14 | | | | |
-| 3. Compatibility — Android 15 | | | | |
+| 3. Compatibility — Android 15 | Android 15 | 2026-09-20 | ✅ PASS | Permission sheet listed **Heart rate, Blood oxygen, Skin temperature**; all granted; `getSdkStatus`/`initialize`/`getGrantedPermissions`/`readVitals` ran without error. Sideloaded dev client visible to Health Connect. |
 | 3. Compatibility — permission denied (partial grant) | | | | |
 | 4. SOS — relay deployed | | | | |
 | 4. SOS — composer fallback | | | | |
