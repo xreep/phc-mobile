@@ -35,7 +35,9 @@ module.exports = {
 
   // `.claude/worktrees/` holds agent worktrees — full checkouts with their own `src/` — which
   // would otherwise be collected as duplicate suites.
-  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/', '/.claude/'],
+  // Anchored to this checkout: a worktree that itself lives under `.claude/worktrees/` must still
+  // see its own tests, so the pattern matches `<rootDir>/.claude/`, not any `.claude/` segment.
+  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/', '<rootDir>/.claude/'],
   // Generated native build output duplicates package.json files, which confuses
   // the module map.
   modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/', '<rootDir>/.claude/'],
