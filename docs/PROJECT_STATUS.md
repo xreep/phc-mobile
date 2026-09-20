@@ -52,7 +52,17 @@ merged. None has run on a device.
 
 ## Device Validated
 
-**None of the sensing or SOS layers have ever run on a phone.** Health Connect ingestion, the accelerometer fold, and the SOS delivery machine (Twilio relay + SMS composer) exist as code with unit/integration test coverage against mocked native modules only. The single thing that has run on a device is UI rendering and live OpenWeatherMap weather, observed on an August build ("the August APK") — and even that was against a simulated vitals window, not live Health Connect data.
+**First device run: 2026-09-20, one Android 15 phone, EAS development client (build `5b4de821`).**
+Results table: [`docs/validation/device-validation-plan.md`](validation/device-validation-plan.md).
+
+Validated on that device:
+- EAS dev-client install and Metro connection over tunnel.
+- Health Connect: permission sheet lists Heart rate, Blood oxygen, Skin temperature; grant reaches the app; `HeartRateSeries` and `OxygenSaturation` records written by Health Connect Toolbox appear in the vitals row within one 60-s poll; a 40-min-old record is correctly ignored (outside the 20-min retention window).
+- Risk engine on real data: SpO₂ 91 % → Respiratory *Alert* (`respiratory.spo2.low`); local AQI 177 → *Caution* advisory (PR #6) on real air-quality data; two SpO₂ 80 % samples → **critical** → vibration → 30-s countdown.
+- SOS fallback path: countdown expiry opened the SMS composer pre-filled and addressed to the contact (relay not configured, so the composer path was exercised; the user pressed send).
+- Notifications: a "Respiratory risk: high" notification arrived on the device — **after** a device-found fix (PR #14): without a foreground handler `expo-notifications` suppressed every alert, since sensing is foreground-only. Notification permission was `denied` on first run and was picked up on the next foreground after enabling it in App info.
+
+Still **not** device validated: skin-temperature records, accelerometer/fall on a real drop, the Twilio relay (blocked on Twilio KYC — see Blockers), airplane-mode behaviour, Android 14, battery.
 
 ## Real-World Validated
 

@@ -14,21 +14,21 @@ Blocked**. No accuracy, false-positive, or battery figures are included — none
 | Rule engine — fall | ✅ | ✅ | ❌ | ❌ | Unit tested |
 | Rule engine — dehydration | ✅ | ✅ | ❌ | ❌ | Unit tested |
 | Rule engine — fatigue | ✅ | ✅ | ❌ | ❌ | Unit tested |
-| Heart rate (Health Connect) | ✅ | ✅ | ❌ | ❌ | Unit tested (mocked native module) |
-| SpO₂ (Health Connect) | ✅ | ✅ | ❌ | ❌ | Unit tested (mocked native module) |
+| Heart rate (Health Connect) | ✅ | ✅ | ✅ | ❌ | Device validated 2026-09-20 (Android 15, Toolbox record read within one poll) |
+| SpO₂ (Health Connect) | ✅ | ✅ | ✅ | ❌ | Device validated 2026-09-20 (91 % → flag; 2×80 % → critical → SOS countdown) |
 | Skin temperature (Health Connect) | ✅ | ✅ | ❌ | ❌ | Unit tested; `SkinTemperature` on HC <1.1 unverified |
 | Accelerometer fold (`MotionSummary`) | ✅ | ✅ | ❌ | ❌ | Unit tested (mocked `expo-sensors`) |
 | Fall detection (engine + motion) | ✅ | ✅ | ❌ | ❌ | Unit tested; demoed only via the dev "Simulate a fall" splice |
-| Health Connect adapter (permissions, I/O) | ✅ | ✅ | ❌ | ❌ | Unit tested (mocked native module) |
+| Health Connect adapter (permissions, I/O) | ✅ | ✅ | ✅ | ❌ | Device validated 2026-09-20 (Android 15: all three permissions listed and granted) |
 | Environment / weather (OpenWeatherMap) | ✅ | ✅ | 🟡 | ❌ | Live weather seen working on the August APK (simulated vitals); not a full device validation pass |
 | AQI display (Environment screen) | ✅ | ✅ | ❌ | ❌ | Unit tested |
-| AQI → risk (respiratory `envMultiplier` + advisory) | ✅ | ✅ | ❌ | ❌ | Integration tested — merged to master (PR #6); not device validated |
+| AQI → risk (respiratory `envMultiplier` + advisory) | ✅ | ✅ | ✅ | ❌ | Device validated 2026-09-20 (local AQI 177 → Caution on real air-quality data) |
 | Personal baselines (10-min rolling mean) | 🟡 | ✅ | ❌ | ❌ | Unit tested; partial — not a day/week baseline |
 | Reading persistence (SQLite) | ❌ | ❌ | ❌ | ❌ | Planned (P1) |
 | Trends screen | 🟡 | ✅ | ❌ | ❌ | Mock-demo — renders hardcoded `TRENDS` constants |
-| Local notifications | ✅ | ✅ | ❌ | ❌ | Integration tested — merged to master (PR #8); foreground-only; not device validated |
+| Local notifications | ✅ | ✅ | ✅ | ❌ | Device validated 2026-09-20 after the foreground-handler fix (PR #14); foreground-only |
 | Background sensing | ❌ | ❌ | ❌ | ❌ | Planned (P1) — polling and accelerometer fold stop when backgrounded |
-| SOS flow (state machine, cancel window) | ✅ | ✅ | ❌ | ❌ | Unit/integration tested |
+| SOS flow (state machine, cancel window) | ✅ | ✅ | ✅ | ❌ | Device validated 2026-09-20: critical → vibration → 30-s countdown → SMS composer (fallback path; relay not yet deployed) |
 | SMS relay (Twilio) | ✅ | ✅ | ❌ | ❌ | Unit tested; relay not deployed |
 | SMS composer fallback | ✅ | ✅ | ❌ | ❌ | Unit tested |
 | Offline operation (engine + cached env) | ✅ | ✅ | ❌ | ❌ | Unit tested; airplane-mode SOS flow not run on a device |

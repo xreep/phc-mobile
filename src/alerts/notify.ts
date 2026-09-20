@@ -58,6 +58,19 @@ function toPermission(status: string): AlertPermission {
  */
 export async function ensureAlertChannels(): Promise<void> {
   try {
+    // Found on the first device run, not in any test: `expo-notifications` **suppresses a
+    // notification that arrives while the app is in the foreground** unless a handler says to
+    // show it — and since sensing is foreground-only today, *every* alert fires while the app is
+    // open. Without this, the planner's intents were delivered to the OS and never displayed.
+    // Banner + shade list, no sound (the critical channel's vibration pattern is the cue).
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: false,
+        shouldSetBadge: false,
+      }),
+    });
     await Notifications.setNotificationChannelAsync(ALERT_CHANNEL_ID, {
       name: 'Risk alerts',
       importance: Notifications.AndroidImportance.HIGH,
