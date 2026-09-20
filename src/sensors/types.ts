@@ -23,7 +23,13 @@ export type SensorFeedStatus =
   /** The last poll failed. `readings` keeps what was already buffered. */
   | 'error';
 
-export type SensorFailureKind = 'sdk' | 'permission' | 'read' | 'unknown';
+export type SensorFailureKind =
+  | 'sdk'
+  | 'permission'
+  | 'read'
+  /** The persistent reading store rejected a write or read; the feed fell back to memory. */
+  | 'store'
+  | 'unknown';
 
 export type SensorFailure = {
   readonly message: string;
@@ -36,6 +42,13 @@ export type SensorFeed = {
   readonly status: SensorFeedStatus;
   /** Set whenever the last step failed, even while buffered readings are still shown. */
   readonly failure: SensorFailure | null;
+  /**
+   * Set (kind `'store'`) when the last poll could not persist to, or read back from, the
+   * reading store. Separate from `failure` because the feed is still live: readings are served
+   * from the in-memory merge instead, so the Dashboard keeps scoring; only history is at risk.
+   * Cleared by the next poll that persists.
+   */
+  readonly storeFailure: SensorFailure | null;
   /** Epoch ms of the last successful poll; null before the first. */
   readonly lastPolledAt: number | null;
   /** User-initiated: the only path that raises the Health Connect permission dialog. */

@@ -8,6 +8,11 @@
  * The feed is gated here, not in the hook's callers: Settings' "Sensor source" picker is the
  * single switch, and reading it in one place is what keeps a demo on the simulated window
  * from quietly also polling Health Connect underneath.
+ *
+ * Also gated on the reading store being `ready` (M6): the store provider serves a placeholder
+ * until SQLite has opened or failed, and a first poll that landed in the placeholder would be
+ * lost when the real store took over — the warm start the store exists for. The wait is the
+ * length of one database open, in the tens of milliseconds.
  */
 
 import { createContext, useContext, type ReactNode } from 'react';
@@ -15,12 +20,14 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { useSensors } from '@/hooks/use-sensors';
 import type { SensorFeed } from '@/sensors/types';
 import { useSettings } from '@/settings/provider';
+import { useReadingStore } from '@/store/provider';
 
 const SensorContext = createContext<SensorFeed | null>(null);
 
 export function SensorProvider({ children }: { children: ReactNode }) {
   const { settings } = useSettings();
-  const feed = useSensors({ enabled: settings.sensorSource === 'health_connect' });
+  const { store, ready } = useReadingStore();
+  const feed = useSensors({ enabled: ready && settings.sensorSource === 'health_connect', store });
   return <SensorContext.Provider value={feed}>{children}</SensorContext.Provider>;
 }
 

@@ -53,6 +53,7 @@ beforeEach(() => {
     readings: [liveReading(-30_000, 131)],
     status: 'live',
     failure: null,
+    storeFailure: null,
     lastPolledAt: NOW,
     requestAccess,
     refresh: jest.fn(),

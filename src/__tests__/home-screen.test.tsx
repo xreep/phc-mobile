@@ -43,6 +43,7 @@ import { checkHealthConnect, grantedVitalsPermissions, readVitals } from '@/sens
 import { isMotionAvailable, startMotionFold, type MotionFold } from '@/sensors/motion';
 import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
+import { ReadingStoreProvider } from '@/store/provider';
 import { SETTINGS_KEY } from '@/settings/store';
 
 // Hoisted above the imports, same reasoning as the `@/environment` mock below: the Health
@@ -126,15 +127,20 @@ function renderHome() {
             Storage is the AsyncStorage jest mock, so every test in this file starts from the
             documented defaults: no contacts, SOS opt-in on. */}
         <SettingsProvider>
-          <SensorProvider>
-            {/* `useAlerts` (inside `HomeScreen`) reads the shared permission from here — see
-                `@/alerts/provider`'s module doc. The global `expo-notifications` mock leaves
-                permission 'undetermined', so this suite's assertions are unaffected: no
-                delivery, exactly as before this provider existed. */}
-            <AlertsProvider>
-              <HomeScreen />
-            </AlertsProvider>
-          </SensorProvider>
+          {/* The reading store the feed persists to. Under Jest the SQLite shim rejects and the
+              provider serves a memory store; with the simulated source (this suite's default)
+              nothing is written to it at all (`use-sensors.test.ts`). */}
+          <ReadingStoreProvider>
+            <SensorProvider>
+              {/* `useAlerts` (inside `HomeScreen`) reads the shared permission from here — see
+                  `@/alerts/provider`'s module doc. The global `expo-notifications` mock leaves
+                  permission 'undetermined', so this suite's assertions are unaffected: no
+                  delivery, exactly as before this provider existed. */}
+              <AlertsProvider>
+                <HomeScreen />
+              </AlertsProvider>
+            </SensorProvider>
+          </ReadingStoreProvider>
         </SettingsProvider>
       </EnvironmentProvider>
     </SafeAreaProvider>,
