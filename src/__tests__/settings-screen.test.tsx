@@ -24,6 +24,7 @@ import { SettingsProvider } from '@/settings/provider';
 import { readSettings, SETTINGS_KEY } from '@/settings/store';
 import { MemoryReadingStore } from '@/store/memory';
 import { ReadingStoreProvider } from '@/store/provider';
+import { openSqliteReadingStore } from '@/store/sqlite';
 
 // `@/alerts/notify` talks to `expo-notifications`; the screen's own concern (through the real
 // `AlertsProvider`, wrapped below — see that module's doc for why permission is shared state
@@ -36,8 +37,17 @@ jest.mock('@/alerts/notify', () => ({
   requestAlertPermission: jest.fn(() => Promise.resolve('undetermined')),
 }));
 
+// Only the "store not ready yet" test needs this: `renderSettings` injects a memory store (ready
+// at once), so the one way to observe the pre-open window is a real provider whose SQLite open
+// never settles.
+jest.mock('@/store/sqlite', () => ({
+  ...jest.requireActual('@/store/sqlite'),
+  openSqliteReadingStore: jest.fn(),
+}));
+
 const mockedGetAlertPermission = jest.mocked(getAlertPermission);
 const mockedRequestAlertPermission = jest.mocked(requestAlertPermission);
+const mockedOpenSqlite = jest.mocked(openSqliteReadingStore);
 
 const INSETS = {
   frame: { x: 0, y: 0, width: 390, height: 844 },
@@ -78,6 +88,7 @@ let readingStore: MemoryReadingStore;
 beforeEach(async () => {
   await AsyncStorage.clear();
   readingStore = new MemoryReadingStore();
+  mockedOpenSqlite.mockReset().mockRejectedValue(new Error('no sqlite under test'));
   delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
   mockedGetAlertPermission.mockReset().mockResolvedValue('undetermined');
   mockedRequestAlertPermission.mockReset().mockResolvedValue('undetermined');
@@ -370,6 +381,42 @@ describe('erase my health data (M6)', () => {
     expect(
       screen.getByText('Deletes all readings stored on this phone. Settings and contacts are kept.'),
     ).toBeTruthy();
+  });
+
+  it('is disabled, and never reaches the confirm, while the store is still opening', async () => {
+    // Before the SQLite open settles the provider serves a memory placeholder. An erase
+    // confirmed in that window would clear the placeholder and print "Readings erased." while
+    // `phc.db` sat untouched — a false privacy claim — so the row waits for `ready`.
+    mockedOpenSqlite.mockReturnValue(new Promise(() => {}));
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const screen = await render(
+      <SafeAreaProvider initialMetrics={INSETS}>
+        <SettingsProvider>
+          <ReadingStoreProvider>
+            <AlertsProvider>
+              <SettingsScreen />
+            </AlertsProvider>
+          </ReadingStoreProvider>
+        </SettingsProvider>
+      </SafeAreaProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+    await waitFor(() => expect(mockedOpenSqlite).toHaveBeenCalledTimes(1));
+
+    const row = screen.getByLabelText('Erase my health data');
+    expect(row.props.accessibilityState).toEqual({ disabled: true });
+
+    await fireEvent.press(row);
+    expect(alert).not.toHaveBeenCalled();
+    alert.mockRestore();
+  });
+
+  it('is enabled once the store is ready', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+    expect(screen.getByLabelText('Erase my health data').props.accessibilityState).toEqual({
+      disabled: false,
+    });
   });
 
   it('asks for confirmation first and erases nothing until it is given', async () => {

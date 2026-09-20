@@ -6,6 +6,11 @@
  * summaries), it is a per-sample value with no use to Trends or baselines, and a once-per-poll
  * vector cannot land on a fall impact anyway (`MotionSummary`'s doc). A reading whose only
  * payload is a raw vector has no row to write and is dropped by `append`.
+ *
+ * Identity caveat: a reading carrying `hr` *and* a raw `motion` vector has identity `…|h|||m`
+ * but reads back as `…|h|||` (the vector is gone). The SQLite `key` column stores the original
+ * identity, so DB dedupe is stable across re-polls; only the hook's `mergeReadings` fallback
+ * could theoretically hold both shapes at once. Moot today — no adapter emits raw vectors.
  */
 
 import type { SensorReading } from '@/risk';

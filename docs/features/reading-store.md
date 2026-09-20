@@ -26,7 +26,7 @@ ReadingStoreProvider  (src/store/provider.tsx — mounted in _layout.tsx above S
    │ opens SqliteReadingStore once; falls back to MemoryReadingStore if the open rejects
    ▼
 SensorProvider → useSensors({ enabled, store })
-   │ warm start: readSince(now − BUFFER_RETAIN_MS) on enable
+   │ warm start: readSince(now − BUFFER_RETAIN_MS) once permissions are confirmed (beginPolling)
    │ each poll:  append(vitals + motion) → prune(now − 7 d) → readSince(now − BUFFER_RETAIN_MS)
    ▼
 SensorFeed.readings  (the engine window, served from the store)
@@ -81,7 +81,10 @@ carrying only a raw vector is dropped by `append`.
 2. The poll `append`s both to the store — the motion-only reading of a failed vitals read too, so
    the fall rule's trail survives a flaky band and a restart.
 3. `prune(now − 7 d)`, then `readSince(now − BUFFER_RETAIN_MS)` becomes the feed's buffer.
-4. On enable, before the first poll, the buffer is warm-started from the store.
+4. Once Health Connect permissions are confirmed (`beginPolling` — the same point the
+   accelerometer fold starts), before the first poll, the buffer is warm-started from the store.
+   Not on bare enable: while status is `permission-required` the Dashboard's notice assumes an
+   empty buffer, and painting a previous session's readings there would mislead.
 5. **Nothing leaves the device.** The store is a file in the app's private directory; no code path
    reads it for transmission. The SOS payload (PRD §7.2.6) is composed from the feed's latest
    vitals, as before, not from the store.

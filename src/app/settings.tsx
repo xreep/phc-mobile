@@ -64,8 +64,12 @@ export default function SettingsScreen() {
   // (ADR-006), so the control to erase them ships with the store. Destructive and irreversible,
   // hence the confirm; it touches only the reading store — the settings store (contacts, name,
   // profile) is a different file and is not read or written here.
-  const { store: readingStore } = useReadingStore();
+  // `ready` matters: before the SQLite open settles the provider serves a memory placeholder,
+  // and "erasing" that would print "Readings erased." while `phc.db` sat untouched — a false
+  // privacy claim. The row stays disabled until the real store is in hand.
+  const { store: readingStore, ready: readingStoreReady } = useReadingStore();
   const [eraseOutcome, setEraseOutcome] = useState<EraseOutcome>('idle');
+  const eraseDisabled = !readingStoreReady || eraseOutcome === 'erasing';
 
   const eraseReadings = () => {
     setEraseOutcome('erasing');
@@ -76,6 +80,9 @@ export default function SettingsScreen() {
   };
 
   const confirmErase = () => {
+    // Guarded here as well as by `disabled`: a press queued before the placeholder was swapped
+    // out must not reach the confirm either.
+    if (eraseDisabled) return;
     Alert.alert(`${ERASE_TITLE}?`, ERASE_DESCRIPTION, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Erase', style: 'destructive', onPress: eraseReadings },
@@ -246,7 +253,8 @@ export default function SettingsScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={ERASE_TITLE}
-          disabled={eraseOutcome === 'erasing'}
+          accessibilityState={{ disabled: eraseDisabled }}
+          disabled={eraseDisabled}
           onPress={confirmErase}
           style={({ pressed }) => pressed && styles.pressed}>
           <SettingRow title={ERASE_TITLE} description={ERASE_DESCRIPTION}>
