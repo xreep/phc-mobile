@@ -1,0 +1,27 @@
+# PHC emergency alert relay — Cloudflare Worker (free tier, no card).
+# Deploy runbook: README.md in this directory.
+#
+# NO SECRETS IN THIS FILE. Bot tokens, API keys and the app key are set with
+# `wrangler secret put <NAME>` and live only in the Worker's environment.
+
+name = "phc-sos-relay"
+main = "src/index.ts"
+compatibility_date = "2026-09-15"
+
+# Non-secret configuration. Override per deployment without a code change.
+[vars]
+# Channels tried, in order, when the request does not name any (the legacy `{ to, message }`
+# body from the current app build). Known names: telegram, textbelt, twilio, fcm.
+CHANNEL_ORDER = "telegram,textbelt"
+# "true": after a data-channel success (Telegram/FCM) still attempt exactly one SMS adapter
+# when the contact has a phone number — an emergency deserves both. See src/dispatch.ts.
+SMS_ALWAYS = "true"
+# Best-effort per-IP token bucket inside the Worker (src/ratelimit.ts). Real enforcement is a
+# dashboard rate-limiting rule — see README.md.
+RATE_LIMIT_PER_MINUTE = "10"
+
+# One-time Telegram link codes (6 digits, 10-minute TTL) — see src/link.ts.
+# Create with `npx wrangler kv namespace create LINKS` and paste the printed id here.
+[[kv_namespaces]]
+binding = "LINKS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
