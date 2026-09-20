@@ -21,7 +21,11 @@ export type MergeOptions = {
   readonly retainMs: number;
 };
 
-function identity(reading: SensorReading): string {
+/**
+ * The dedupe key. Exported so the persistent store (`@/store`) keys rows on exactly this string
+ * and the two can never disagree about whether a reading is "already held".
+ */
+export function identity(reading: SensorReading): string {
   return [
     reading.timestamp,
     reading.source,
