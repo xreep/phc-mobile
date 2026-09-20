@@ -10,6 +10,15 @@ against a simulated vitals window. See [`docs/PROJECT_STATUS.md`](docs/PROJECT_S
 
 ## [Unreleased]
 
+### Fixed
+- Notifications: register a foreground notification handler — `expo-notifications` suppressed
+  every alert because sensing is foreground-only (found on the first device run; PR #14).
+
+### Validation
+- 2026-09-20, Android 15, EAS dev client: Health Connect HeartRate + SpO₂ reads, permission
+  sheet, AQI advisory on real air, SpO₂ flag and critical → SOS countdown → SMS composer, and
+  notification delivery are **device validated**. See `docs/validation/device-validation-plan.md`.
+
 ### Added
 - `.gitattributes` (LF normalisation) and CI (typecheck, lint, test on every push and PR to `master`).
 - This documentation tree (`docs/PROJECT_STATUS.md`, `docs/BUILD_MATRIX.md`, `docs/ROADMAP.md`,
