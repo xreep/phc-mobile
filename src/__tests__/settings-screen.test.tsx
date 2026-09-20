@@ -14,6 +14,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Alert, type AlertButton } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { getAlertPermission, requestAlertPermission } from '@/alerts/notify';
@@ -21,6 +22,8 @@ import { AlertsProvider } from '@/alerts/provider';
 import SettingsScreen from '@/app/settings';
 import { SettingsProvider } from '@/settings/provider';
 import { readSettings, SETTINGS_KEY } from '@/settings/store';
+import { MemoryReadingStore } from '@/store/memory';
+import { ReadingStoreProvider } from '@/store/provider';
 
 // `@/alerts/notify` talks to `expo-notifications`; the screen's own concern (through the real
 // `AlertsProvider`, wrapped below — see that module's doc for why permission is shared state
@@ -57,18 +60,24 @@ function renderSettings() {
   return render(
     <SafeAreaProvider initialMetrics={INSETS}>
       <SettingsProvider>
-        <AlertsProvider>
-          <SettingsScreen />
-        </AlertsProvider>
+        {/* A known memory store, so "Erase my health data" has something real to erase and the
+            test can count what is left. */}
+        <ReadingStoreProvider store={readingStore}>
+          <AlertsProvider>
+            <SettingsScreen />
+          </AlertsProvider>
+        </ReadingStoreProvider>
       </SettingsProvider>
     </SafeAreaProvider>,
   );
 }
 
 const originalRelay = process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+let readingStore: MemoryReadingStore;
 
 beforeEach(async () => {
   await AsyncStorage.clear();
+  readingStore = new MemoryReadingStore();
   delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
   mockedGetAlertPermission.mockReset().mockResolvedValue('undetermined');
   mockedRequestAlertPermission.mockReset().mockResolvedValue('undetermined');
@@ -337,6 +346,128 @@ describe('data sharing', () => {
 
     // And the retired claim is gone rather than merely moved.
     expect(screen.queryByText(/No raw health data leaves your device/)).toBeNull();
+  });
+});
+
+describe('erase my health data (M6)', () => {
+  // The reading store persists real vitals in plaintext, app-private storage (ADR-006), so a
+  // way to erase it ships with it. The control is destructive and irreversible, hence the
+  // confirm; and it must leave settings and contacts alone — a user clearing readings must not
+  // lose the emergency contact list.
+  const READINGS = [
+    { source: 'health_connect' as const, timestamp: 1_766_000_000_000, hr: 72 },
+    { source: 'health_connect' as const, timestamp: 1_766_000_060_000, spo2: 97 },
+  ];
+
+  function buttons(alert: jest.SpyInstance): AlertButton[] {
+    const call = alert.mock.calls.at(-1);
+    return (call?.[2] ?? []) as AlertButton[];
+  }
+
+  it('shows the row with honest copy about what it deletes and what it keeps', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+    expect(
+      screen.getByText('Deletes all readings stored on this phone. Settings and contacts are kept.'),
+    ).toBeTruthy();
+  });
+
+  it('asks for confirmation first and erases nothing until it is given', async () => {
+    await readingStore.append(READINGS);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+
+    await fireEvent.press(screen.getByText('Erase my health data'));
+
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][0]).toBe('Erase my health data?');
+    expect(alert.mock.calls[0][1]).toBe(
+      'Deletes all readings stored on this phone. Settings and contacts are kept.',
+    );
+    await expect(readingStore.count()).resolves.toBe(2);
+    alert.mockRestore();
+  });
+
+  it('keeps everything when the confirm is cancelled', async () => {
+    await readingStore.append(READINGS);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+    await fireEvent.press(screen.getByText('Erase my health data'));
+
+    const cancel = buttons(alert).find((b) => b.style === 'cancel');
+    expect(cancel?.text).toBe('Cancel');
+    await act(async () => {
+      cancel?.onPress?.();
+    });
+
+    await expect(readingStore.count()).resolves.toBe(2);
+    alert.mockRestore();
+  });
+
+  it('clears the store on confirm and leaves settings and contacts untouched', async () => {
+    await readingStore.append(READINGS);
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        userName: 'Asha',
+        contacts: [{ id: 'c1', name: 'Ravi', relation: 'Brother', phone: '+919876543210' }],
+      }),
+    );
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Ravi')).toBeTruthy());
+    await fireEvent.press(screen.getByText('Erase my health data'));
+
+    const erase = buttons(alert).find((b) => b.style === 'destructive');
+    expect(erase?.text).toBe('Erase');
+    await act(async () => {
+      erase?.onPress?.();
+    });
+
+    await waitFor(async () => {
+      await expect(readingStore.count()).resolves.toBe(0);
+    });
+    await expect(readSettings()).resolves.toMatchObject({
+      userName: 'Asha',
+      contacts: [{ name: 'Ravi', phone: '+919876543210' }],
+    });
+    expect(screen.getByText('Ravi')).toBeTruthy();
+    alert.mockRestore();
+  });
+
+  it('reports a store that could not be erased rather than pretending it was', async () => {
+    jest.spyOn(readingStore, 'clear').mockRejectedValue(new Error('database is locked'));
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+    await fireEvent.press(screen.getByText('Erase my health data'));
+
+    const erase = buttons(alert).find((b) => b.style === 'destructive');
+    await act(async () => {
+      erase?.onPress?.();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Could not erase readings — try again.')).toBeTruthy(),
+    );
+    alert.mockRestore();
+  });
+
+  it('confirms on screen once the readings are gone', async () => {
+    await readingStore.append(READINGS);
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Erase my health data')).toBeTruthy());
+    await fireEvent.press(screen.getByText('Erase my health data'));
+    const erase = buttons(alert).find((b) => b.style === 'destructive');
+    await act(async () => {
+      erase?.onPress?.();
+    });
+
+    await waitFor(() => expect(screen.getByText('Readings erased.')).toBeTruthy());
+    alert.mockRestore();
   });
 });
 
