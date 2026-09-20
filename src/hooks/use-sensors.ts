@@ -160,14 +160,8 @@ export function useSensors({ enabled, store }: UseSensorsOptions): SensorFeed {
 
       // On a failed vitals read the motion reading still goes through — a flaky band must not
       // blind fall detection — and it is persisted for the same reason.
-      const incoming =
-        readError === null
-          ? motionReading === null
-            ? vitals
-            : [...vitals, motionReading]
-          : motionReading === null
-            ? []
-            : [motionReading];
+      const incoming: SensorReading[] = readError === null ? [...vitals] : [];
+      if (motionReading !== null) incoming.push(motionReading);
 
       // The store is the system of record: append, prune history, read the window back.
       // Any of the three rejecting degrades to the in-memory merge for this poll.
