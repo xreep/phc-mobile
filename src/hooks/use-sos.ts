@@ -29,7 +29,7 @@ import { Vibration } from 'react-native';
 import { useSettings } from '@/settings/provider';
 import { isSosEnabled } from '@/settings/store';
 import type { RiskAssessment, SensorReading } from '@/risk';
-import { COUNTDOWN_TICK_MS, isTwilioConfigured, LOCATION_TIMEOUT_MS } from '@/sos/config';
+import { COUNTDOWN_TICK_MS, isRelayConfigured, LOCATION_TIMEOUT_MS } from '@/sos/config';
 import { dispatchSos, type DispatchOptions } from '@/sos/deliver';
 import { resolveSosLocation } from '@/sos/location';
 import { describeCriticalRule } from '@/sos/message';
@@ -237,7 +237,7 @@ export function useSos(input: UseSosInput, options: UseSosOptions = {}): SosCont
 
       const result = await send(contacts, context, {
         ...options.dispatchOptions,
-        skipTwilio: offline === true || options.dispatchOptions?.skipTwilio === true,
+        skipRelay: offline === true || options.dispatchOptions?.skipRelay === true,
       });
 
       dispatch({ type: 'dispatched', result, now: now() });
@@ -270,7 +270,7 @@ export function useSos(input: UseSosInput, options: UseSosOptions = {}): SosCont
   // and a stale `clock` left behind by a *previous* countdown, which is always older than a newly
   // armed trigger and so loses the `Math.max`.
   const displayClock = Math.max(clock, state.trigger?.armedAt ?? 0);
-  const relayConfigured = useMemo(() => isTwilioConfigured(), []);
+  const relayConfigured = useMemo(() => isRelayConfigured(), []);
 
   const triggerRules = state.trigger?.criticalRules;
   const reasons = useMemo(

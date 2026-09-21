@@ -102,6 +102,24 @@ Specific choices inside the decision:
   the affected routes answer 503; `/health` reports both so a misconfiguration is visible before
   the first alert.
 
+## Addendum — app side (M5 part 1b, 2026-09-21)
+
+The phone now speaks the structured contract rather than the legacy body. `src/sos/relay.ts`
+(replacing `twilio.ts`) POSTs `{ to: { phone, telegramChatId? }, message, channels }` per contact,
+where `channels` is `['telegram']` when the contact has linked plus `['textbelt', 'twilio']`
+whenever there is a number — both SMS adapters are always named so a deployment can switch Twilio
+on with an environment variable and no app release, which is the property this ADR was written
+for. Success is `2xx` **and** `delivered: true`; anything else, including the relay's 502 and a
+timeout, falls back per contact to the device-validated SMS composer exactly as before.
+`EmergencyContact` gains an optional `telegramChatId` (validate-on-read: a malformed value drops
+the field, never the contact), the contact editor links a caregiver's Telegram through the
+app-generated 128-bit deep-link token (`expo-crypto` `getRandomValues`, polled every 10 s for the
+relay's 10-minute TTL — 10 s because the relay's per-IP bucket is 10/min shared with `/sos`), and
+the overlay reports per contact and per channel ("Sent to Meera via Telegram", "Opened SMS app for
+Raj"). `EXPO_PUBLIC_SOS_RELAY_URL` replaces `EXPO_PUBLIC_TWILIO_SOS_URL`, which is still read for one
+release. The relay's Telegram lane was validated by hand on 2026-09-21; the app-side dispatch and
+linking UI are unit/integration tested (Jest) and **not** device validated.
+
 ## Alternatives rejected
 
 See Options 1–4 above. In one line each: Twilio-only is blocked on KYC and money; phone-direct puts

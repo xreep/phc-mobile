@@ -60,7 +60,7 @@ function reduce(state: SosMachineState, ...events: readonly SosEvent[]): SosMach
 function result(overrides: Partial<SosDispatchResult> = {}): SosDispatchResult {
   return {
     attempts: [],
-    twilioSent: [],
+    relayDelivered: [],
     nativeSmsPending: false,
     failed: false,
     message: 'PHC EMERGENCY',
@@ -432,12 +432,12 @@ describe('dispatch outcomes', () => {
   it('maps a delivered alert to sent', () => {
     const state = reduce(dispatching(), {
       type: 'dispatched',
-      result: result({ twilioSent: ['c1'] }),
+      result: result({ relayDelivered: [{ contactId: 'c1', channels: ['telegram'] }] }),
       now: T0 + 31_000,
     });
 
     expect(state.phase).toBe('sent');
-    expect(state.result?.twilioSent).toEqual(['c1']);
+    expect(state.result?.relayDelivered).toEqual([{ contactId: 'c1', channels: ['telegram'] }]);
     expect(state.trigger).toBeNull();
   });
 
@@ -456,7 +456,10 @@ describe('dispatch outcomes', () => {
     // second, and the second is the one that needs the user to do something.
     const state = reduce(dispatching(), {
       type: 'dispatched',
-      result: result({ twilioSent: ['c1'], nativeSmsPending: true }),
+      result: result({
+        relayDelivered: [{ contactId: 'c1', channels: ['textbelt'] }],
+        nativeSmsPending: true,
+      }),
       now: T0 + 31_000,
     });
 

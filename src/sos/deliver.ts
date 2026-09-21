@@ -1,15 +1,20 @@
 /**
  * SOS delivery orchestration (PRD §7.2.5 step 2: "send SMS via Twilio … or native SMS
- * intent as offline fallback").
+ * intent as offline fallback" — now "via the relay", ADR-007).
  *
  * ## The escalation, and why it is per-contact
- * Twilio is attempted for every contact first, concurrently. Whoever it could not reach — a
+ * The relay is attempted for every contact first, concurrently. Whoever it could not reach — a
  * failure, a timeout, or no relay configured at all — is then rolled into a single native
  * composer. Falling back per-contact rather than all-or-nothing matters because the two
- * common partial failures are opposite: a relay that is up but rejects one malformed number,
- * and a relay that is down for everyone. Retrying the whole list through the composer in the
- * first case would ask the user to manually re-send messages that already went out, and
- * duplicate emergency texts are their own kind of harm.
+ * common partial failures are opposite: a relay that is up but cannot deliver to one contact
+ * (no Telegram link, SMS quota spent), and a relay that is down for everyone. Retrying the
+ * whole list through the composer in the first case would ask the user to manually re-send
+ * messages that already went out, and duplicate emergency texts are their own kind of harm.
+ *
+ * ## "Reached" means the relay said `delivered: true`
+ * A contact whose Telegram message landed but whose SMS did not is reached — one channel is
+ * enough to put the alert in front of a person, and the composer does not open for them. Both
+ * rows are still recorded, so the UI can say "sent via Telegram" rather than implying both.
  *
  * ## Concurrent, not sequential
  * Contacts are dispatched with `Promise.all`. Sequential sends would add the full relay
@@ -19,16 +24,17 @@
 
 import { composeSosMessage } from './message';
 import { sendViaNativeSms, type NativeSmsOptions } from './native-sms';
+import { relayChannelsFor, sendViaRelay, type RelaySendOptions } from './relay';
 import type {
   EmergencyContact,
   SosContext,
   SosDeliveryAttempt,
   SosDispatchResult,
+  SosRelayDelivery,
 } from './types';
-import { sendViaTwilio, type TwilioSendOptions } from './twilio';
 
 export type DispatchOptions = {
-  readonly twilio?: TwilioSendOptions;
+  readonly relay?: RelaySendOptions;
   readonly sms?: NativeSmsOptions;
   /**
    * Skip the relay entirely and go straight to the composer.
@@ -37,13 +43,13 @@ export type DispatchOptions = {
    * knows the network is down (a failed environment refresh, a `NetInfo` state) and there is
    * no reason to spend 10 s of an emergency proving it again.
    */
-  readonly skipTwilio?: boolean;
+  readonly skipRelay?: boolean;
 };
 
 /**
  * Run the full escalation for one alert.
  *
- * Never throws. Both channels report failure as data, and the caller needs the breakdown to
+ * Never throws. Both paths report failure as data, and the caller needs the breakdown to
  * tell the user which contacts were actually reached.
  */
 export async function dispatchSos(
@@ -56,7 +62,7 @@ export async function dispatchSos(
   if (contacts.length === 0) {
     return {
       attempts: [],
-      twilioSent: [],
+      relayDelivered: [],
       nativeSmsPending: false,
       failed: true,
       message,
@@ -65,29 +71,51 @@ export async function dispatchSos(
 
   const attempts: SosDeliveryAttempt[] = [];
   const unreached: EmergencyContact[] = [];
-  const twilioSent: string[] = [];
+  const relayDelivered: SosRelayDelivery[] = [];
 
-  if (options.skipTwilio === true) {
+  if (options.skipRelay === true) {
     unreached.push(...contacts);
   } else {
     const results = await Promise.all(
       contacts.map(async (contact) => ({
         contact,
-        result: await sendViaTwilio(contact.phone, message, options.twilio),
+        result: await sendViaRelay(contact, message, options.relay),
       })),
     );
 
     for (const { contact, result } of results) {
-      attempts.push({
-        contactId: contact.id,
-        phone: contact.phone,
-        channel: 'twilio',
-        ok: result.ok,
-        error: result.ok ? undefined : result.error,
-      });
+      // Both arms of the union carry `results` (required on success, optional on failure).
+      const rows = result.results;
+      const overallError = result.ok ? undefined : result.error;
+      if (rows !== undefined) {
+        // The relay answered per channel. One row each, verbatim, so the UI can say which
+        // lane carried the alert and why the other did not.
+        for (const row of rows) {
+          attempts.push({
+            contactId: contact.id,
+            phone: contact.phone,
+            channel: row.channel,
+            ok: row.ok,
+            error: row.ok ? undefined : (row.error ?? overallError),
+          });
+        }
+      } else {
+        // The relay was not reached, or answered without per-channel rows (timeout, network,
+        // 401, unconfigured). Every channel this contact would have used gets the same reason,
+        // so the audit trail still has one row per channel per contact.
+        for (const channel of relayChannelsFor(contact)) {
+          attempts.push({
+            contactId: contact.id,
+            phone: contact.phone,
+            channel,
+            ok: false,
+            error: overallError,
+          });
+        }
+      }
 
       if (result.ok) {
-        twilioSent.push(contact.id);
+        relayDelivered.push({ contactId: contact.id, channels: result.channels });
       } else {
         unreached.push(contact);
       }
@@ -123,11 +151,11 @@ export async function dispatchSos(
 
   return {
     attempts,
-    twilioSent,
+    relayDelivered,
     nativeSmsPending,
     // Failed only when nothing at all got out. A composer that opened counts as progress even
     // though it needs a tap, because the user can still complete it.
-    failed: twilioSent.length === 0 && !nativeSmsPending,
+    failed: relayDelivered.length === 0 && !nativeSmsPending,
     message,
   };
 }

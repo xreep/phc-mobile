@@ -10,7 +10,8 @@
  * by someone having a medical emergency.
  *
  * So this file assembles the real thing and stubs only at the two edges the test process cannot
- * cross: `fetch` (the user's serverless function) and `expo-sms` (the platform composer).
+ * cross: `fetch` (the emergency relay, answering in its real shape) and `expo-sms` (the platform
+ * composer).
  * `assessRisk`, `useSos`, `sosReducer`, `dispatchSos`, `composeSosMessage`, `SosAlert`, the
  * settings store and AsyncStorage are all the shipping code.
  *
@@ -37,7 +38,7 @@ import type { DispatchOptions } from '@/sos/deliver';
 const T0 = 1_766_000_000_000;
 
 const CONTACTS = [
-  { id: 'c1', name: 'Meera', relation: 'Sister', phone: '+919876543210' },
+  { id: 'c1', name: 'Meera', relation: 'Sister', phone: '+919876543210', telegramChatId: '123456789' },
   { id: 'c2', name: 'Ravi', relation: 'Neighbour', phone: '+919123456780' },
 ];
 
@@ -61,8 +62,8 @@ const FIX = {
   location: { latitude: 13.0827, longitude: 80.2707, accuracyM: 12, timestamp: T0 },
 };
 
-const ENDPOINT = 'https://phc-1234.twil.io/sos';
-const originalRelay = process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+const ENDPOINT = 'https://phc-sos-relay.example.workers.dev/sos';
+const originalRelay = process.env.EXPO_PUBLIC_SOS_RELAY_URL;
 
 /** Mutable wall clock. Advanced only by `advance`, so ticks are observable separately. */
 let clock = T0;
@@ -105,12 +106,27 @@ async function advance(ms: number) {
   });
 }
 
-/** A `fetch` that reports one verdict for every contact. */
+/**
+ * A `fetch` that reports one verdict for every contact, answering in the relay's real shape:
+ * `{ results: [{ channel, ok, error? }], delivered }`. `'ok'` reports the first requested
+ * channel as delivered, so a linked contact reads "via Telegram" and an unlinked one "via SMS".
+ */
 function relay(verdict: 'ok' | 'network' | number) {
-  return jest.fn(async () => {
+  return jest.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
     if (verdict === 'network') throw new TypeError('Network request failed');
-    if (verdict === 'ok') return { ok: true, status: 200 } as Response;
-    return { ok: false, status: verdict } as Response;
+    const { channels } = JSON.parse(String(init?.body)) as { channels: string[] };
+    if (verdict === 'ok') {
+      const body = {
+        results: channels.map((channel, index) => ({ channel, ok: index === 0 })),
+        delivered: true,
+      };
+      return { ok: true, status: 200, json: () => Promise.resolve(body) } as unknown as Response;
+    }
+    return {
+      ok: false,
+      status: verdict,
+      json: () => Promise.reject(new SyntaxError('empty')),
+    } as unknown as Response;
   }) as unknown as typeof fetch;
 }
 
@@ -133,13 +149,13 @@ beforeEach(async () => {
     SETTINGS_KEY,
     JSON.stringify({ contacts: CONTACTS, userName: 'Asha' }),
   );
-  process.env.EXPO_PUBLIC_TWILIO_SOS_URL = ENDPOINT;
+  process.env.EXPO_PUBLIC_SOS_RELAY_URL = ENDPOINT;
 });
 
 afterEach(() => {
   jest.useRealTimers();
-  if (originalRelay === undefined) delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
-  else process.env.EXPO_PUBLIC_TWILIO_SOS_URL = originalRelay;
+  if (originalRelay === undefined) delete process.env.EXPO_PUBLIC_SOS_RELAY_URL;
+  else process.env.EXPO_PUBLIC_SOS_RELAY_URL = originalRelay;
 });
 
 /** Options with the two process boundaries stubbed and everything in between real. */
@@ -211,7 +227,7 @@ describe('a critical reading arms the cancel window', () => {
     const sms = composer();
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -230,7 +246,7 @@ describe('cancelling', () => {
     const sms = composer();
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -253,7 +269,7 @@ describe('cancelling', () => {
     const fetchImpl = relay('ok');
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -274,7 +290,7 @@ describe('the window closing commits the alert', () => {
     const sms = composer();
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -282,16 +298,27 @@ describe('the window closing commits the alert', () => {
 
     await waitFor(() => expect(screen.getByText('SENT')).toBeTruthy());
     expect(screen.getByText('Delivered to 2 contacts.')).toBeTruthy();
+    // Per contact, naming the channel the relay reported — the linked contact on Telegram, the
+    // other by SMS gateway. What the user reads is what the relay said, not a guess.
+    expect(screen.getByText('· Sent to Meera via Telegram')).toBeTruthy();
+    expect(screen.getByText('· Sent to Ravi via SMS')).toBeTruthy();
     // The composer stayed shut: the primary path worked, so nothing needs the user.
     expect(sms.sendSMSAsync).not.toHaveBeenCalled();
 
-    // One POST per contact, each carrying the `{ to, message }` contract.
+    // One POST per contact, each carrying the relay's structured contract: the linked contact
+    // sends her chat id and asks for Telegram first; the other sends neither.
     const calls = (fetchImpl as jest.Mock).mock.calls;
     expect(calls).toHaveLength(2);
-    expect(calls.map((call) => JSON.parse(String(call[1]?.body)).to).sort()).toEqual([
-      '+919123456780',
-      '+919876543210',
-    ]);
+    const bodies = calls.map((call) => JSON.parse(String(call[1]?.body)));
+    expect(bodies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          to: { phone: '+919876543210', telegramChatId: '123456789' },
+          channels: ['telegram', 'textbelt', 'twilio'],
+        }),
+        expect.objectContaining({ to: { phone: '+919123456780' }, channels: ['textbelt', 'twilio'] }),
+      ]),
+    );
 
     // The whole chain in one assertion: engine → machine → location → composer → relay. The
     // name comes from settings, the reason from the engine's `criticalRules`, the vitals from
@@ -313,7 +340,7 @@ describe('the window closing commits the alert', () => {
     const sms = composer();
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl }, sms: { smsImpl: sms } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -321,6 +348,9 @@ describe('the window closing commits the alert', () => {
 
     await waitFor(() => expect(screen.getByText('NEEDS ONE MORE TAP')).toBeTruthy());
     expect(screen.getByText('Press send in your SMS app')).toBeTruthy();
+    // Named per contact, and "opened", never "sent".
+    expect(screen.getByText('· Opened SMS app for Meera')).toBeTruthy();
+    expect(screen.getByText('· Opened SMS app for Ravi')).toBeTruthy();
 
     // One composer for both contacts, addressed in E.164.
     expect(sms.sendSMSAsync).toHaveBeenCalledTimes(1);
@@ -339,7 +369,7 @@ describe('the window closing commits the alert', () => {
       DESATURATING,
       options({
         dispatchOptions: {
-          twilio: { endpoint: ENDPOINT, fetchImpl: relay(500) },
+          relay: { endpoint: ENDPOINT, fetchImpl: relay(500) },
           sms: {
             smsImpl: {
               isAvailableAsync: () => Promise.resolve(false),
@@ -356,6 +386,8 @@ describe('the window closing commits the alert', () => {
     await waitFor(() => expect(screen.getByText('NOT SENT')).toBeTruthy());
     // Told what to do instead, rather than left with a failure and no next step.
     expect(screen.getByText('Nothing was delivered. Call your emergency contact directly.')).toBeTruthy();
+    // One line per contact per reason: the relay left the same reason on every channel row
+    // for a contact, and the overlay collapses those rather than printing it three times.
     expect(screen.getAllByText('· The SOS relay failed (500).')).toHaveLength(2);
     expect(screen.getAllByText('· This device cannot send SMS.')).toHaveLength(2);
   });
@@ -368,7 +400,7 @@ describe('the window closing commits the alert', () => {
       DESATURATING,
       options({
         location: () => Promise.resolve({ ok: false, reason: 'timeout' }),
-        dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } },
+        dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } },
       }),
     );
 
@@ -387,7 +419,7 @@ describe('the window closing commits the alert', () => {
     const fetchImpl = jest.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -407,7 +439,7 @@ describe('the window closing commits the alert', () => {
     const fetchImpl = relay('ok');
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } } }),
     );
 
     await waitFor(() => expect(screen.getByText('CRITICAL RISK DETECTED')).toBeTruthy());
@@ -441,7 +473,7 @@ describe('the SOS button', () => {
     const fetchImpl = relay('ok');
     const screen = await renderFlow(
       HEALTHY,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } } }),
     );
     await waitFor(() => expect(screen.getByText('Emergency SOS')).toBeTruthy());
 
@@ -461,7 +493,7 @@ describe('the gates in front of sending', () => {
     const fetchImpl = relay('ok');
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } } }),
     );
 
     await waitFor(() => expect(screen.getByText('NO CONTACTS')).toBeTruthy());
@@ -484,7 +516,7 @@ describe('the gates in front of sending', () => {
     const fetchImpl = relay('ok');
     const screen = await renderFlow(
       DESATURATING,
-      options({ dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } } }),
+      options({ dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } } }),
     );
 
     await waitFor(() => expect(screen.getByText('SOS IS OFF')).toBeTruthy());
@@ -506,6 +538,7 @@ describe('the gates in front of sending', () => {
 
 describe('what the window promises about how it will send', () => {
   it('warns that the SMS app will open when no relay is configured', async () => {
+    delete process.env.EXPO_PUBLIC_SOS_RELAY_URL;
     delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
 
     const screen = await renderFlow(DESATURATING, options({}));
