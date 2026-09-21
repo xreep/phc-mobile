@@ -17,6 +17,15 @@
  * enables `useSensors` for `'health_connect'`), so the fallback message would describe a failure
  * mode that cannot yet occur for it.
  *
+ * ## Gated on `ready`, not just `backend`
+ * `ReadingStoreProvider` serves a placeholder `MemoryReadingStore` (`backend: 'memory'`) while
+ * the real SQLite open is still in flight (`ready: false`) — that placeholder is not the
+ * documented "SQLite failed" fallback, it is every launch's first few dozen milliseconds. Without
+ * gating on `ready`, a phone with Health Connect selected would flash the "may not survive a
+ * restart" notice on every cold start before flipping back to normal once the real store won —
+ * a false alarm rather than a status. So `!ready` reports `'loading'` unconditionally, before
+ * `backend`/`sensorSource` are consulted at all.
+ *
  * ## Simulated-source handling lives in the screen, not here
  * `TrendsStatus` has no "simulated" member. Whether the *current* picker is on simulated data is
  * a display decision — always show the "switch to Health Connect" banner and never the chart —
@@ -56,7 +65,7 @@ export type UseTrendsResult = {
 };
 
 export function useTrends(range: TrendRange): UseTrendsResult {
-  const { store, backend } = useReadingStore();
+  const { store, backend, ready } = useReadingStore();
   const { lastPolledAt } = useSensorFeed();
   const { settings } = useSettings();
 
@@ -105,13 +114,15 @@ export function useTrends(range: TrendRange): UseTrendsResult {
   }, [range, store, lastPolledAt]);
 
   const unavailable = backend === 'memory' && settings.sensorSource === 'health_connect';
-  const status: TrendsStatus = unavailable
-    ? 'unavailable'
-    : loading
-      ? 'loading'
-      : series.length === 0
-        ? 'empty'
-        : 'ready';
+  const status: TrendsStatus = !ready
+    ? 'loading'
+    : unavailable
+      ? 'unavailable'
+      : loading
+        ? 'loading'
+        : series.length === 0
+          ? 'empty'
+          : 'ready';
 
   return { series, status };
 }

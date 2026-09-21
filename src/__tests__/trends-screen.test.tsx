@@ -17,6 +17,15 @@
  *    when SQLite fails to open (`use-trends.test.ts` covers that rule directly).
  * 3. **The range toggle re-aggregates** rather than swapping between two pre-baked arrays: a
  *    reading placed only inside the 7-day window must be invisible at 24h and appear at 7d.
+ *
+ * ## Every case leads with `findByText`, never a bare `getByText` right after `render`
+ * `useTrends`'s data effect resolves `store.readSince(...)` — a real `Promise`, even against the
+ * in-memory store — after `render`'s own await returns. On this suite's first test that gap
+ * lands the effect's `setLoading`/`setSeries` calls outside any `act()`, and React warns
+ * ("not configured to support act(...)") even though the assertions still pass — a suite that is
+ * green by timing rather than by waiting for the real settle point. `findByText` polls (wrapped
+ * in `act`) instead of asserting the instant `render` returns, which is what closes the gap. The
+ * `console.error` guard below turns a regression back into a hard failure instead of quiet noise.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -53,11 +62,17 @@ function renderTrends(store: MemoryReadingStore) {
   );
 }
 
+let consoleError: jest.SpyInstance;
+
 beforeEach(() => {
   jest.spyOn(Date, 'now').mockReturnValue(NOW);
+  // Suppresses the noise and records it, so a regression to an un-`act`-wrapped state update
+  // fails the test instead of scrolling past silently.
+  consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(async () => {
+  expect(consoleError).not.toHaveBeenCalled();
   jest.restoreAllMocks();
   await AsyncStorage.clear();
 });
@@ -68,11 +83,11 @@ describe('Trends screen', () => {
       const store = new MemoryReadingStore();
       await store.append([{ source: 'health_connect', timestamp: NOW - HOUR, hr: 61 }]);
 
-      const { getByText, queryByText } = await renderTrends(store);
+      const { findByText, queryByText } = await renderTrends(store);
 
-      expect(getByText('Trends need recorded readings')).toBeTruthy();
+      expect(await findByText('Trends need recorded readings')).toBeTruthy();
       expect(
-        getByText(
+        await findByText(
           'Switch Sensor source to Android Health Connect in Settings. Simulated readings are never stored.',
         ),
       ).toBeTruthy();
@@ -96,9 +111,9 @@ describe('Trends screen', () => {
         { source: 'health_connect', timestamp: NOW - HOUR, hr: 133 }, // newest → current
       ]);
 
-      const { getByText } = await renderTrends(store);
+      const { findByText, getByText } = await renderTrends(store);
 
-      expect(getByText('Heart Rate')).toBeTruthy();
+      expect(await findByText('Heart Rate')).toBeTruthy();
       // `current` is the newest sample, not the largest — composed by `summarizeTrend`, printed
       // nowhere in source.
       expect(getByText('133 bpm')).toBeTruthy();
@@ -112,9 +127,9 @@ describe('Trends screen', () => {
     it('shows the honest empty state when nothing falls in the range', async () => {
       const store = new MemoryReadingStore();
 
-      const { getByText } = await renderTrends(store);
+      const { findByText } = await renderTrends(store);
 
-      expect(getByText('No readings in the last 24 hours yet')).toBeTruthy();
+      expect(await findByText('No readings in the last 24 hours yet')).toBeTruthy();
     });
 
     it('re-aggregates on a range toggle rather than swapping between two fixed arrays', async () => {
@@ -124,10 +139,10 @@ describe('Trends screen', () => {
 
       const { getByText, findByText, queryByText } = await renderTrends(store);
 
-      expect(getByText('No readings in the last 24 hours yet')).toBeTruthy();
+      expect(await findByText('No readings in the last 24 hours yet')).toBeTruthy();
       expect(queryByText('Heart Rate')).toBeNull();
 
-      fireEvent.press(getByText('7 days'));
+      await fireEvent.press(getByText('7 days'));
 
       // `useTrends`'s range-change read is asynchronous; `findByText` polls (wrapped in `act`)
       // rather than asserting immediately after the synchronous press.

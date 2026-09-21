@@ -74,8 +74,9 @@ function settingsStore(overrides: Partial<SettingsStore['settings']> = {}): Sett
 function storeContext(
   store: MemoryReadingStore,
   backend: ReadingStoreContextValue['backend'] = 'memory',
+  ready = true,
 ): ReadingStoreContextValue {
-  return { store, backend, ready: true };
+  return { store, backend, ready };
 }
 
 beforeEach(() => {
@@ -158,6 +159,20 @@ describe('useTrends', () => {
     const { result } = await renderHook(() => useTrends('24h'));
 
     expect(result.current.status).toBe('empty');
+  });
+
+  it('reports loading, not unavailable, while the store is still opening (ready: false)', async () => {
+    // `ReadingStoreProvider` serves a `MemoryReadingStore` placeholder — `backend: 'memory'` —
+    // for the whole SQLite-open window, before `ready` flips. With Health Connect selected, that
+    // placeholder must not be read as "SQLite failed" and flash the unavailable notice on every
+    // cold start.
+    const store = new MemoryReadingStore();
+    mockedStore.mockReturnValue(storeContext(store, 'memory', false));
+    mockedSettings.mockReturnValue(settingsStore({ sensorSource: 'health_connect' }));
+
+    const { result } = await renderHook(() => useTrends('24h'));
+
+    expect(result.current.status).toBe('loading');
   });
 
   it('re-reads when lastPolledAt changes', async () => {
