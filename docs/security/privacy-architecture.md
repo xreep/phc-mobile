@@ -59,9 +59,19 @@ SQLCipher/encrypted-storage goal:
 - The environment cache — last-known-good weather/AQI snapshot. Low sensitivity (public weather
   data), but shares the same unencrypted store.
 
-No vital reading is stored anywhere; the `SensorReading` ring buffer is React state only and is
-discarded when the app is killed. **Planned:** `expo-secure-store` for contacts (P2, see
-[`docs/ROADMAP.md`](../ROADMAP.md) M12); an encrypted reading store when persistence lands (M6).
+Since M6, vital readings **are** stored — one `expo-sqlite` database, `phc.db`, in the app's
+private directory, **plaintext, not encrypted**:
+
+- HR, SpO₂, skin temperature, and per-minute motion summaries (peak/min/rms/sample count), each
+  with its timestamp and source, retained for seven days and pruned on every poll. Written only
+  while the live Health Connect feed is polling — the simulated window and the dev fall splice are
+  never persisted. Readable by anything with filesystem access to the app's sandbox, as above.
+  Never transmitted. The user can erase it from Settings → Data sharing → "Erase my health data"
+  (settings and contacts are kept). See [`docs/features/reading-store.md`](../features/reading-store.md)
+  and [`ADR-006`](../decisions/ADR-006-local-reading-store.md).
+
+**Planned:** `expo-secure-store` for contacts and encryption of the reading store with a key in
+the Android Keystore (P2, see [`docs/ROADMAP.md`](../ROADMAP.md) M12).
 
 ## Secrets policy
 

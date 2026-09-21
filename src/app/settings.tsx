@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 
 import { useAlertPermission } from '@/alerts/provider';
 import { Card } from '@/components/card';
@@ -13,9 +13,17 @@ import { useRiskColors, useTheme } from '@/hooks/use-theme';
 import { AGE_BANDS } from '@/settings/profile';
 import { useSettings } from '@/settings/provider';
 import { formatPhoneForDisplay, isTwilioConfigured, type EmergencyContact } from '@/sos';
+import { useReadingStore } from '@/store/provider';
 
 /** What the editor is currently doing. `null` closed; `'new'` creating; otherwise editing. */
 type EditorTarget = EmergencyContact | 'new' | null;
+
+/** Outcome of the last "Erase my health data" press, shown under the row. */
+type EraseOutcome = 'idle' | 'erasing' | 'done' | 'failed';
+
+const ERASE_TITLE = 'Erase my health data';
+const ERASE_DESCRIPTION =
+  'Deletes all readings stored on this phone. Settings and contacts are kept.';
 
 export default function SettingsScreen() {
   const {
@@ -50,6 +58,35 @@ export default function SettingsScreen() {
     // User-initiated only — the prompt must never appear from an effect. Turning the toggle off
     // never touches the OS permission; there is nothing to ask for.
     if (value) requestAlertPermission();
+  };
+
+  // M6 reading store. Readings persist on this phone in plaintext, app-private storage
+  // (ADR-006), so the control to erase them ships with the store. Destructive and irreversible,
+  // hence the confirm; it touches only the reading store — the settings store (contacts, name,
+  // profile) is a different file and is not read or written here.
+  // `ready` matters: before the SQLite open settles the provider serves a memory placeholder,
+  // and "erasing" that would print "Readings erased." while `phc.db` sat untouched — a false
+  // privacy claim. The row stays disabled until the real store is in hand.
+  const { store: readingStore, ready: readingStoreReady } = useReadingStore();
+  const [eraseOutcome, setEraseOutcome] = useState<EraseOutcome>('idle');
+  const eraseDisabled = !readingStoreReady || eraseOutcome === 'erasing';
+
+  const eraseReadings = () => {
+    setEraseOutcome('erasing');
+    void readingStore.clear().then(
+      () => setEraseOutcome('done'),
+      () => setEraseOutcome('failed'),
+    );
+  };
+
+  const confirmErase = () => {
+    // Guarded here as well as by `disabled`: a press queued before the placeholder was swapped
+    // out must not reach the confirm either.
+    if (eraseDisabled) return;
+    Alert.alert(`${ERASE_TITLE}?`, ERASE_DESCRIPTION, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Erase', style: 'destructive', onPress: eraseReadings },
+    ]);
   };
 
   return (
@@ -213,6 +250,29 @@ export default function SettingsScreen() {
             />
           </SettingRow>
         ))}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={ERASE_TITLE}
+          accessibilityState={{ disabled: eraseDisabled }}
+          disabled={eraseDisabled}
+          onPress={confirmErase}
+          style={({ pressed }) => pressed && styles.pressed}>
+          <SettingRow title={ERASE_TITLE} description={ERASE_DESCRIPTION}>
+            <ThemedText type="small" style={{ color: risk.red.fg }}>
+              Erase
+            </ThemedText>
+          </SettingRow>
+        </Pressable>
+        {eraseOutcome === 'done' ? (
+          <ThemedText type="small" themeColor="textSecondary">
+            Readings erased.
+          </ThemedText>
+        ) : null}
+        {eraseOutcome === 'failed' ? (
+          <ThemedText type="small" style={{ color: risk.red.fg }}>
+            Could not erase readings — try again.
+          </ThemedText>
+        ) : null}
       </Card>
       <ThemedText type="small" themeColor="textSecondary">
         All sharing is off by default except emergency SOS, which is the one path that sends

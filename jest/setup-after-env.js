@@ -76,3 +76,13 @@ jest.mock('expo-notifications', () => ({
     DENIED: 'denied',
   },
 }));
+
+// `expo-sqlite` is a native module too. Inert by default — `openDatabaseAsync` rejects — so
+// `ReadingStoreProvider` takes its documented fallback (`MemoryReadingStore`) in every suite and
+// no test ever touches a database file. `src/store/__tests__/sqlite.test.ts` exercises the SQL
+// layer against a fake `SQLiteDatabase` instead; the real driver is device-validated only.
+jest.mock('expo-sqlite', () => ({
+  openDatabaseAsync: jest.fn(() =>
+    Promise.reject(new Error('expo-sqlite is not available under Jest')),
+  ),
+}));

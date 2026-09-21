@@ -45,6 +45,7 @@ import { useSos, type UseSosOptions } from '@/hooks/use-sos';
 import { assessRisk, DEFAULT_RISK_THRESHOLDS, type SensorReading } from '@/risk';
 import { SensorProvider } from '@/sensors/provider';
 import { SettingsProvider } from '@/settings/provider';
+import { ReadingStoreProvider } from '@/store/provider';
 import { SETTINGS_KEY } from '@/settings/store';
 
 // Only the network boundary is stubbed. The feed hook, provider, engine, screen, and SOS module
@@ -177,11 +178,15 @@ function renderHome() {
     <SafeAreaProvider initialMetrics={INSETS}>
       <EnvironmentProvider>
         <SettingsProvider>
-          <SensorProvider>
-            <AlertsProvider>
-              <HomeScreen />
-            </AlertsProvider>
-          </SensorProvider>
+          {/* Memory store (the SQLite shim rejects under Jest). The simulated source never
+              writes to it anyway — `use-sensors.test.ts` pins that. */}
+          <ReadingStoreProvider>
+            <SensorProvider>
+              <AlertsProvider>
+                <HomeScreen />
+              </AlertsProvider>
+            </SensorProvider>
+          </ReadingStoreProvider>
         </SettingsProvider>
       </EnvironmentProvider>
     </SafeAreaProvider>,
