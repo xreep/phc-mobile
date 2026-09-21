@@ -1,58 +1,138 @@
 /**
- * The Trends screen shows sample data and says so.
+ * The Trends screen renders real history from the persisted reading store, not sample data.
  *
- * The screen renders fixed example curves from the `TRENDS` constant — PRD §7.2.1 vitals
- * ingestion has not landed, so nothing is recorded or stored over time. The screen used to
- * subtitle itself "Vitals history from on-device storage", which asserted a persistence layer
- * that does not exist. This file pins the two things that keep that from coming back: the
- * honest disclosure is present, and the old storage claim is absent. Layout is not the point —
- * one card per series is enough to prove the sample data reaches the screen.
+ * Three things matter, and each is a different way the old hardcoded `TRENDS` constant could
+ * still be lurking underneath an honest-looking screen:
+ *
+ * 1. **The simulated source shows the disclosure, never a chart** — even when the store still
+ *    holds real history from an earlier Health Connect session (`src/store/types.ts`'s "simulated
+ *    readings are never written" rule means that history is real but stale-by-source, and this
+ *    build does not try to disambiguate "current" from "leftover" for the reader).
+ * 2. **A live source renders numbers the aggregator computed**, not anything hardcoded in
+ *    `trends.tsx` or `constants/health-data.ts`. The assertions below use bpm values chosen
+ *    specifically because they exist nowhere in source — 133 and 97 are not in `TrendCard`,
+ *    `formatValue`, or any fixture this file shares with the component. `ble_esp32` is used as
+ *    the "live" source rather than `health_connect`, so this suite exercises `status: 'ready'`
+ *    without also tripping the memory-backend `'unavailable'` rule that a real device only hits
+ *    when SQLite fails to open (`use-trends.test.ts` covers that rule directly).
+ * 3. **The range toggle re-aggregates** rather than swapping between two pre-baked arrays: a
+ *    reading placed only inside the 7-day window must be invisible at 24h and appear at 7d.
  */
 
-import { render } from '@testing-library/react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import TrendsScreen from '@/app/trends';
-import { TRENDS } from '@/constants/health-data';
+import { SensorProvider } from '@/sensors/provider';
+import { SettingsProvider } from '@/settings/provider';
+import { SETTINGS_KEY } from '@/settings/store';
+import { MemoryReadingStore } from '@/store';
+import { ReadingStoreProvider } from '@/store/provider';
 
 const INSETS = {
   frame: { x: 0, y: 0, width: 390, height: 844 },
   insets: { top: 47, left: 0, right: 0, bottom: 34 },
 };
 
-function renderTrends() {
+const NOW = 1_766_000_000_000;
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+function renderTrends(store: MemoryReadingStore) {
   return render(
     <SafeAreaProvider initialMetrics={INSETS}>
-      <TrendsScreen />
+      <SettingsProvider>
+        <ReadingStoreProvider store={store}>
+          <SensorProvider>
+            <TrendsScreen />
+          </SensorProvider>
+        </ReadingStoreProvider>
+      </SettingsProvider>
     </SafeAreaProvider>,
   );
 }
 
+beforeEach(() => {
+  jest.spyOn(Date, 'now').mockReturnValue(NOW);
+});
+
+afterEach(async () => {
+  jest.restoreAllMocks();
+  await AsyncStorage.clear();
+});
+
 describe('Trends screen', () => {
-  it('discloses that the data is sample data, not a stored history', async () => {
-    const { getByText } = await renderTrends();
+  describe('simulated source (the default)', () => {
+    it('shows the disclosure and no chart, even when the store holds real history', async () => {
+      const store = new MemoryReadingStore();
+      await store.append([{ source: 'health_connect', timestamp: NOW - HOUR, hr: 61 }]);
 
-    expect(getByText('Example data — not a recorded history')).toBeTruthy();
-    expect(
-      getByText(
-        'These curves are fixed sample series to show how trends will look. This build does not yet record or store your vitals over time, so nothing here reflects your own readings.',
-      ),
-    ).toBeTruthy();
+      const { getByText, queryByText } = await renderTrends(store);
+
+      expect(getByText('Trends need recorded readings')).toBeTruthy();
+      expect(
+        getByText(
+          'Switch Sensor source to Android Health Connect in Settings. Simulated readings are never stored.',
+        ),
+      ).toBeTruthy();
+      expect(queryByText('Heart Rate')).toBeNull();
+      expect(queryByText('61 bpm')).toBeNull();
+    });
   });
 
-  it('no longer claims the vitals come from on-device storage', async () => {
-    const { queryByText } = await renderTrends();
+  describe('a live source with recorded history', () => {
+    beforeEach(async () => {
+      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ sensorSource: 'ble_esp32' }));
+    });
 
-    // The exact retired string, and the substring that carried the false persistence claim.
-    expect(queryByText('Vitals history from on-device storage')).toBeNull();
-    expect(queryByText(/on-device storage/)).toBeNull();
-  });
+    it('renders numbers the aggregator computed, not anything hardcoded', async () => {
+      const store = new MemoryReadingStore();
+      // Three distinct values, oldest → newest, so `current` (newest), `max`, `min` and `avg`
+      // each land on a different number and this test cannot pass by accident.
+      await store.append([
+        { source: 'health_connect', timestamp: NOW - 3 * HOUR, hr: 61 }, // min
+        { source: 'health_connect', timestamp: NOW - 2 * HOUR, hr: 200 }, // max, but not newest
+        { source: 'health_connect', timestamp: NOW - HOUR, hr: 133 }, // newest → current
+      ]);
 
-  it('renders a card for each example series in the default 24-hour range', async () => {
-    const { getByText } = await renderTrends();
+      const { getByText } = await renderTrends(store);
 
-    for (const series of TRENDS['24h']) {
-      expect(getByText(series.label)).toBeTruthy();
-    }
+      expect(getByText('Heart Rate')).toBeTruthy();
+      // `current` is the newest sample, not the largest — composed by `summarizeTrend`, printed
+      // nowhere in source.
+      expect(getByText('133 bpm')).toBeTruthy();
+      expect(getByText('61 bpm')).toBeTruthy(); // Min
+      expect(getByText('200 bpm')).toBeTruthy(); // Max
+      // avg = (61 + 200 + 133) / 3 = 131.33…, rounded — also composed, not a literal anywhere
+      // in this build.
+      expect(getByText('131 bpm')).toBeTruthy();
+    });
+
+    it('shows the honest empty state when nothing falls in the range', async () => {
+      const store = new MemoryReadingStore();
+
+      const { getByText } = await renderTrends(store);
+
+      expect(getByText('No readings in the last 24 hours yet')).toBeTruthy();
+    });
+
+    it('re-aggregates on a range toggle rather than swapping between two fixed arrays', async () => {
+      const store = new MemoryReadingStore();
+      // Only inside the 7-day window, not the 24-hour one.
+      await store.append([{ source: 'health_connect', timestamp: NOW - 3 * DAY, hr: 150 }]);
+
+      const { getByText, findByText, queryByText } = await renderTrends(store);
+
+      expect(getByText('No readings in the last 24 hours yet')).toBeTruthy();
+      expect(queryByText('Heart Rate')).toBeNull();
+
+      fireEvent.press(getByText('7 days'));
+
+      // `useTrends`'s range-change read is asynchronous; `findByText` polls (wrapped in `act`)
+      // rather than asserting immediately after the synchronous press.
+      expect(await findByText('Heart Rate')).toBeTruthy();
+      expect(queryByText('No readings in the last 24 hours yet')).toBeNull();
+    });
   });
 });
