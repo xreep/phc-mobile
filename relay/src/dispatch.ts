@@ -111,7 +111,9 @@ export async function dispatch(
 
   // One timer for the whole dispatch. Every in-flight send races against it; once it fires, every
   // later race resolves immediately and the `remaining <= 0` check catches adapters not yet started.
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  // `null`, not `undefined`: workers-types' `clearTimeout` takes `number | null`, and the CI
+  // job typechecks against an isolated install where that signature wins.
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
   const deadline = new Promise<typeof DEADLINE>((resolve) => {
     deadlineTimer = setTimeout(() => resolve(DEADLINE), Math.max(0, deadlineAt - now()));
   });
@@ -189,7 +191,7 @@ export async function dispatch(
     await Promise.all([runData(), runSms()]);
   }
 
-  clearTimeout(deadlineTimer);
+  if (deadlineTimer !== null) clearTimeout(deadlineTimer);
   return {
     results: plan.map((name) => results.get(name) ?? { channel: name, ok: false, error: SKIPPED_ERROR }),
     delivered: state.delivered,
