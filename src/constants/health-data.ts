@@ -84,94 +84,15 @@ export const VITALS: VitalsSummary = {
   skinTempC: 36.8,
 };
 
-export type TrendRange = '24h' | '7d';
-
-export type TrendSeries = {
-  key: 'hr' | 'spo2' | 'skinTemp';
-  label: string;
-  unit: string;
-  current: number;
-  min: number;
-  avg: number;
-  max: number;
-  /** Ordered samples, oldest → newest, for the mini bar chart. */
-  points: number[];
-};
-
 /**
- * Fixed 24hr / 7-day example series for the Trends screen (PRD §7.2.4 Trends).
+ * The Trends screen's range picker (PS §7a "daily summaries and trend analysis").
  *
- * Not a recorded history: PRD §7.2.1 ingestion has not landed, so no vitals are written to disk
- * anywhere in this build. These are demo curves showing what the screen will look like once
- * there is a buffer to draw. `app/trends.tsx` says so on screen — see the banner there for why
- * that disclosure is load-bearing rather than decorative.
+ * The series themselves are no longer a constant here: `src/app/trends.tsx` reads real history
+ * from the persisted reading store via `useTrends` (`src/hooks/use-trends.ts`), aggregated by
+ * `src/trends/aggregate.ts`. This type stays because it is the one small shape both that hook
+ * and the screen's range toggle share.
  */
-export const TRENDS: Record<TrendRange, TrendSeries[]> = {
-  '24h': [
-    {
-      key: 'hr',
-      label: 'Heart Rate',
-      unit: 'bpm',
-      current: 78,
-      min: 58,
-      avg: 74,
-      max: 112,
-      points: [62, 60, 59, 64, 72, 88, 95, 112, 84, 79, 76, 78],
-    },
-    {
-      key: 'spo2',
-      label: 'Blood Oxygen',
-      unit: '%',
-      current: 97,
-      min: 94,
-      avg: 97,
-      max: 99,
-      points: [98, 97, 96, 97, 95, 94, 96, 97, 98, 97, 98, 97],
-    },
-    {
-      key: 'skinTemp',
-      label: 'Skin Temperature',
-      unit: '°C',
-      current: 36.8,
-      min: 36.2,
-      avg: 36.7,
-      max: 37.3,
-      points: [36.3, 36.2, 36.4, 36.6, 36.9, 37.1, 37.3, 37.0, 36.8, 36.7, 36.8, 36.8],
-    },
-  ],
-  '7d': [
-    {
-      key: 'hr',
-      label: 'Heart Rate',
-      unit: 'bpm',
-      current: 78,
-      min: 55,
-      avg: 72,
-      max: 118,
-      points: [71, 69, 74, 118, 76, 73, 72],
-    },
-    {
-      key: 'spo2',
-      label: 'Blood Oxygen',
-      unit: '%',
-      current: 97,
-      min: 92,
-      avg: 96,
-      max: 99,
-      points: [97, 96, 95, 92, 96, 97, 97],
-    },
-    {
-      key: 'skinTemp',
-      label: 'Skin Temperature',
-      unit: '°C',
-      current: 36.8,
-      min: 36.1,
-      avg: 36.8,
-      max: 37.6,
-      points: [36.6, 36.7, 37.6, 37.2, 36.9, 36.8, 36.8],
-    },
-  ],
-};
+export type TrendRange = '24h' | '7d';
 
 /*
  * Emergency contacts now live in persisted settings, not here.
