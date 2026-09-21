@@ -19,15 +19,19 @@ fix is to make the relay provider-agnostic so any adapter can be switched on wit
 variable, never with an app change.
 
 ## Status
-**Relay: Built · Unit tested (vitest, mocked network) — not deployed, not device validated.**
-**App: unchanged in this milestone.** The current app build still sends the legacy body to
-`EXPO_PUBLIC_TWILIO_SOS_URL`; the relay accepts that body, so pointing the existing build at a
-deployed Worker works without an app release. The structured body, the Telegram field on contacts,
-the linking UI and the "sent via Telegram" copy are **M5 part 1b** (separate PR). The caregiver
-push role (FCM) is **M5 part 2**.
+**Relay: Built · Unit tested (vitest, mocked network) · Deployed at
+`phc-sos-relay.xreep.workers.dev` · Telegram lane validated by hand (2026-09-21: `/start
+<linkToken>` → `/link` → `/sos` delivered to a real Telegram account); Textbelt answered "free SMS
+disabled for this country" and the relay returned 502 as designed.**
+**App (M5 part 1b): Built · Unit/Integration tested (Jest) · Device validated: NO.** The app now
+sends the structured body, carries a per-contact `telegramChatId`, links a caregiver's Telegram from
+Settings, and reports per contact and per channel. The legacy body is still accepted by the relay,
+so an older build pointed at the Worker keeps working. The caregiver push role (FCM) is **M5 part
+2**.
 
 No adapter is described as validated until it has delivered a real message to a second phone; the
-table in [`relay/README.md`](../../relay/README.md#status--read-this-first) is the record.
+table in [`relay/README.md`](../../relay/README.md#status--read-this-first) is the record. No
+*app build* has yet sent an alert through the deployed relay — that is the next validation event.
 
 ## Why the indirection exists
 
@@ -47,7 +51,8 @@ phone ──POST /sos {to, message, channels}──▶ relay (Cloudflare Worker,
                                               ├─ twilio adapter    ──▶ api.twilio.com         (built, disabled)
                                               └─ fcm adapter       ──▶ fcm.googleapis.com     (stub, part 2)
                        ◀── { results: [{channel, ok, error?}], delivered } ──
-phone: 2xx → done; non-2xx / timeout / no network → native SMS composer (unchanged, device-validated path)
+phone: 2xx + delivered:true → done; anything else (502, 5xx, 4xx, timeout, no network, 2xx without
+       delivered:true) → native SMS composer for that contact (unchanged, device-validated path)
 ```
 
 Secrets live only in the Worker environment (`wrangler secret put`). Abuse control for the public
@@ -70,8 +75,8 @@ X-PHC-Key: <RELAY_APP_KEY, only if the deployment set one>
 
 - `to` — one contact; at least one of `phone` (E.164), `telegramChatId`, `pushToken`. The app sends
   **one request per contact**, concurrently, so partial failure stays per-contact.
-- **Legacy body still accepted:** `{ "to": "+919876543210", "message": "…" }` — exactly what
-  `src/sos/twilio.ts` sends today — is treated as `to: { phone }` with the Worker's `CHANNEL_ORDER`.
+- **Legacy body still accepted:** `{ "to": "+919876543210", "message": "…" }` — what app builds
+  before M5 part 1b sent — is treated as `to: { phone }` with the Worker's `CHANNEL_ORDER`.
 - `message` — the complete alert, already composed and length-managed by the app. The relay sends
   it **verbatim**; rewriting it would put text in front of an emergency contact that no test in this
   repo covers. Max 4096 characters.
@@ -80,23 +85,64 @@ X-PHC-Key: <RELAY_APP_KEY, only if the deployment set one>
 
 Response: `{ "results": [ { "channel", "ok", "error"? } … ], "delivered": <any ok> }`.
 
-Response handling, from `src/sos/twilio.ts` (unchanged by this milestone):
+## The contract, as the app sends it (M5 part 1b)
+
+`src/sos/relay.ts` (`sendViaRelay(contact, message, options)`; the old `twilio.ts` is gone and every
+import was updated — nothing outside `src/sos/` imported it directly). One request per contact,
+concurrently, with the 10 s timeout (`RELAY_TIMEOUT_MS`, formerly `TWILIO_TIMEOUT_MS`) that the
+relay's own 8 s deadline is sized inside:
+
+```
+POST <EXPO_PUBLIC_SOS_RELAY_URL>            # the /sos endpoint
+Content-Type: application/json
+X-PHC-Key: <EXPO_PUBLIC_SOS_RELAY_KEY>      # only when that variable is set
+
+{ "to": { "phone": "+919876543210", "telegramChatId": "123456789" },   # chat id only when linked
+  "message": "<composed by src/sos/message.ts, sent verbatim>",
+  "channels": ["telegram", "textbelt", "twilio"] }
+```
+
+**Channel derivation** (`relayChannelsFor`): `['telegram']` when the contact has a `telegramChatId`,
+then `['textbelt', 'twilio']` whenever there is a phone number. Both SMS adapters are always named —
+the relay skips the unconfigured one — so a deployment can switch Twilio on with an environment
+variable and no app release. `fcm` is never named until the caregiver role exists (part 2), and any
+result row for a channel the app does not know is dropped rather than shown.
+
+**Response handling** (pinned in `src/sos/__tests__/relay.test.ts`):
 
 | Response | App behaviour |
 | --- | --- |
-| any `2xx` | Success — `delivered: true`. The body is not read by the current build. |
-| `502` | Every channel failed (`delivered: false`) → falls back to the composer for that contact. |
-| `503` | Misconfigured deployment (paid SMS channel without `RELAY_APP_KEY`) → composer. |
-| `413` | Body over 16 KiB — a bug, not a runtime state. |
-| `400` | Invalid body — a bug, not a runtime state; reported as a relay failure. |
-| `401` / `403` | Reported as a relay auth problem (`RELAY_APP_KEY` mismatch). |
-| `404` | Reported as a bad relay URL. |
-| `429` | Reported as rate limited. |
-| any other non-2xx | Reported as a relay failure, with the status. |
-| network error, or no response within 10 s | Falls back to the native SMS composer. |
+| `2xx` **and** body `delivered: true` | Success. `results[].ok` names the channels that carried it; the overlay says "Sent to Meera via Telegram" / "via Telegram and SMS" / "via SMS". A failed row beside a successful one is kept for the audit trail but does **not** open the composer — one channel is enough to put the alert in front of a person. |
+| `2xx` without `delivered: true`, or no readable body | Treated as a failure ("The SOS relay did not confirm delivery.") → composer for that contact. The previous client accepted a bare 204; this one cannot, because `delivered` is the only evidence a message reached a provider. |
+| `502` | Every channel failed → composer for that contact, with the relay's per-channel reasons in the failed-phase list. |
+| `503` | "not fully configured" (paid SMS channel without `RELAY_APP_KEY`) → composer. |
+| `401` / `403` | "check the app key" → composer. |
+| `404` | "relay URL was not found" → composer. |
+| `429` | "rate limited" → composer. |
+| any other non-2xx | "failed (status)" / "returned an error (status)" → composer. |
+| network error, or no response within 10 s | "could not reach" / "timed out" → composer. |
 
-Every non-2xx and every timeout falls back per-contact to the composer, so a broken relay degrades
-the alert to "needs one tap" rather than losing it.
+Every non-2xx and every timeout falls back per-contact to the composer, exactly as the
+device-validated build did, so a broken relay degrades the alert to "needs one tap" rather than
+losing it. When no URL is configured the relay is *skipped*, not failed, and the composer opens at
+once. `skipRelay` (formerly `skipTwilio`) is the caller's "I already know there is no data" branch.
+
+**Result shape** (`SosDispatchResult`): `attempts` is one row per contact per channel — the relay's
+own rows when it answered, or one row per planned channel carrying the same reason when it did not
+(timeout, network, 401), plus a `native_sms` row per contact the composer covered;
+`relayDelivered` is `[{ contactId, channels }]` for contacts the relay confirmed (replacing the
+old `twilioSent: string[]`); `nativeSmsPending` and `failed` are unchanged. `SosChannel` is now
+`'telegram' | 'textbelt' | 'twilio' | 'native_sms'`.
+
+**Environment variable rename:** `EXPO_PUBLIC_SOS_RELAY_URL` (the `/sos` endpoint;
+`/health` and `/link` are resolved as its siblings) replaces `EXPO_PUBLIC_TWILIO_SOS_URL`. The old
+name is still read when the new one is unset or unusable, for one release, and nothing logs which
+one was used. `EXPO_PUBLIC_SOS_RELAY_KEY` is optional and becomes the `X-PHC-Key` header on `/sos`
+and `/link` when set. `.env.local` is gitignored; the README's example line still names the old
+variable (controller-owned, see the tail of this doc).
+
+**Settings copy:** "Automatic relay: configured (Telegram + SMS gateway)" / "Automatic relay: not
+configured", with the description naming `EXPO_PUBLIC_SOS_RELAY_URL`.
 
 ## Channels
 
@@ -127,7 +173,7 @@ A bot can only message a chat that opened it first, so a caregiver links once by
 
 1. The app generates a 128-bit random `linkToken` (base64url, 22 chars, from the phone's CSPRNG)
    and shows the caregiver `https://t.me/<BOT_USERNAME>?start=<linkToken>` (`BOT_USERNAME` comes
-   from `/health`; QR is a later nicety). Part 1b UI.
+   from `/health`; QR is a later nicety).
 2. The caregiver taps it; Telegram sends `/start <linkToken>` to `POST /telegram/webhook`. The
    Worker stores `link:<linkToken> → chat_id` in KV for ten minutes and replies "Linked to PHC. You
    will receive emergency alerts here." A bare `/start` or any other text gets a help line and
@@ -146,6 +192,39 @@ requires `TELEGRAM_WEBHOOK_SECRET` (503 without it, 401 on mismatch); it never r
 No phone number, no name and no health data cross this flow — the bot learns a chat id Telegram
 already knows, and the app learns the same chat id.
 
+### The linking UX, app side (M5 part 1b)
+
+In Settings → a contact's editor → **Telegram alerts** → **Link Telegram**:
+
+1. `GET <relay>/health` for `botUsername` (`src/sos/telegram-link.ts` `fetchRelayBotUsername`). A
+   relay that answers `botUsername: null` or `linking: false` cannot link, and the editor says so;
+   with no relay URL at all the row reads "Relay not configured — Telegram linking needs
+   `EXPO_PUBLIC_SOS_RELAY_URL`. SMS still works." and shows no button.
+2. The token: `expo-crypto`'s `getRandomValues(new Uint8Array(16))` → unpadded base64url, 22
+   characters, the relay's `LINK_TOKEN` regex. `getRandomValues` is the entry point the SDK 57 docs
+   describe as cryptographically secure; `getRandomBytes` is documented as falling back to
+   `Math.random` in development, which is why it is not used. Under Jest, `expo-crypto` is mocked
+   globally with a deterministic byte ramp so the encoding is pinned exactly.
+3. The editor shows the `t.me` link, the instruction "Send this link to the contact. They tap it in
+   Telegram and press Start. If Telegram does not show the code, they can send `/start <code>` to
+   @<bot>.", and a **Share link** button (React Native `Share.share`, the platform sheet). There is
+   no Copy button: `expo-clipboard` is not installed and the share sheet reaches every messaging app
+   a caregiver might already be in; the link is also rendered as selectable text.
+4. `POST <relay>/link { linkToken }` **immediately, then every 10 s, for up to 10 min**
+   (`src/hooks/use-telegram-link.ts`). 10 s because the relay's per-IP token bucket is 10 requests a
+   minute *shared with `/sos`*: six polls a minute leaves four for an SOS that fires while a link is
+   pending, where every 5 s would leave none. 10 min because that is the relay's KV TTL — polling
+   past it can only ever see 404. `404` → keep waiting; `429` / `5xx` / network → keep waiting (the
+   token is still good); `401` / `400` → stop with the reason; `{ telegramChatId }` → "Linked ✓".
+5. The chat id lands in the editor's draft and is stored on **Save contact** (validate-on-read in
+   `src/settings/store.ts`: digits with an optional leading `-`, up to 20; a malformed value drops
+   the field and keeps the contact). Cancel discards it like any other unsaved edit, and the copy
+   says "Save the contact to keep it". **Unlink Telegram** clears the field. The contact list shows a
+   "Telegram" badge on linked contacts.
+6. Polling stops when the chat id arrives, on **Unlink**, on expiry ("Link expired — try again",
+   with a fresh token on retry), and when the editor closes — every step checks it is still the
+   current session and the component is still mounted before touching state.
+
 ## Implementation
 - **Where:** `relay/` — its own `package.json`, TypeScript, `wrangler` v4, `@cloudflare/workers-types`,
   vitest. Deployed with one `wrangler deploy` (free tier: 100k requests/day, no card). CI runs its
@@ -156,7 +235,8 @@ already knows, and the app learns the same chat id.
 - **Validation** is hand-rolled like the app's (no zod). E.164 only; refuse rather than guess.
 - **Rate limit:** in-isolate token bucket (best-effort, documented as such) plus the dashboard rule.
 - **Logging:** nothing logs a body, phone number or chat id; the only `console.*` is the error name on
-  an unhandled exception.
+  an unhandled exception. The app side has no `console.*` at all in `src/sos/relay.ts`,
+  `src/sos/telegram-link.ts` or the linking hook.
 
 ## Files
 - `relay/src/index.ts` — router (`/sos`, `/link`, `/telegram/webhook`, `/health`)
@@ -166,7 +246,13 @@ already knows, and the app learns the same chat id.
 - `relay/src/link.ts` — link tokens, webhook handling
 - `relay/src/ratelimit.ts` — token bucket
 - `relay/wrangler.toml`, `relay/README.md` (runbook)
-- App side (unchanged, reference): `src/sos/twilio.ts`, `src/sos/deliver.ts`, `src/sos/config.ts`
+- App side: `src/sos/config.ts` (env var, `RELAY_TIMEOUT_MS`, sibling routes, app key),
+  `src/sos/relay.ts` (the client), `src/sos/deliver.ts` (per-contact escalation),
+  `src/sos/outcome.ts` (per-contact overlay lines), `src/sos/telegram-link.ts` (token, deep link,
+  `/health`, `/link`), `src/hooks/use-telegram-link.ts` (cadence and stopping),
+  `src/components/contact-editor.tsx` (the linking UI), `src/app/settings.tsx` (badge, relay copy),
+  `src/components/sos-alert.tsx` (per-contact outcome lines), `src/settings/store.ts`
+  (`telegramChatId` validate-on-read), `src/sos/types.ts`
 
 ## Data Flow
 Phone → `POST /sos` (message + one contact's destination) → Worker → provider API → caregiver. The
@@ -174,7 +260,29 @@ SOS payload is the only outbound health data, exactly as before. Link flow: Tele
 id) → KV (10 min) → app. Nothing is persisted by the Worker beyond link tokens.
 
 ## Tests
-`relay/test/*.test.ts` (vitest, 142 tests): validation incl. the legacy body and the link token
+**App (Jest):** `src/sos/__tests__/relay.test.ts` (body by deep equality with and without a chat
+id; channel derivation; `X-PHC-Key` present only when configured; 200 + `delivered` → ok with the
+successful channels; 200 + `delivered: false` and 2xx without a body → failure; 502 with per-channel
+reasons; 400/401/403/404/429/500/503 mapped; network, synchronous throw, timeout, caller abort;
+unconfigured → no fetch), `deliver.test.ts` (Telegram ok + SMS failed = reached, no composer;
+per-contact fallback; one row per channel with the relay's reason when it answered and the same
+reason across planned channels when it did not; concurrency; `skipRelay`; composer outcomes),
+`outcome.test.ts` (the overlay wording), `telegram-link.test.ts` (16 bytes from `getRandomValues`,
+the exact base64url of the mocked bytes and of the `+`/`/`/`=` edge bytes, the relay's regex, deep
+link, instructions, chat-id validation, `/health` and `/link` mapping including 404 = pending and
+429/5xx/network = retry), `src/hooks/__tests__/use-telegram-link.test.ts` (fake timers: health
+fetch, immediate first poll, exactly 10 s cadence, 404 continues, success stores once and stops,
+transient retry, terminal failure, expiry after 10 min with 60 polls, fresh token on restart,
+unmount stops polling and never sets state, reset), `src/settings/__tests__/store.test.ts` (chat id
+kept trimmed, malformed drops the field and keeps the contact, absent key not `undefined`, upsert
+and unlink), `src/__tests__/settings-screen.test.tsx` (unconfigured copy; the full link flow
+through the real screen over a mocked global `fetch` — bot name, link on screen, share sheet, chat
+id, save, badge; badge on a stored link; unlink; cancel discards), and the existing
+`sos-flow.test.tsx` / `simulate-fall.test.tsx` updated to the relay's real response shape and
+asserting "Sent to Meera via Telegram" / "Sent to Ravi via SMS" / "Opened SMS app for …". None of
+these calls the live relay. Suite after this workstream: 63 suites / 1454 tests.
+
+**Relay:** `relay/test/*.test.ts` (vitest, 142 tests): validation incl. the legacy body and the link token
 shape; every adapter's happy path, HTTP error, non-JSON body, real timeout via
 `AbortSignal.timeout`, network error and not-configured/not-applicable guard; dispatch order,
 any-ok → 200, all-fail → 502, `SMS_ALWAYS` on/off, exactly-one-SMS, skipped rows, the
@@ -190,9 +298,17 @@ phone, chat id or token.
 Run: `cd relay && npm test` (also `npm run typecheck`, `npm run check` for a wrangler dry-run).
 
 ## Device Validation
-**None.** The Worker has not been deployed; no adapter has delivered a real message. The app-side
-composer fallback remains the only device-validated SOS path. The runbook's smoke test is the
-validation event; record it in `docs/PROJECT_STATUS.md` when it happens.
+**Relay:** deployed 2026-09-21; the Telegram lane delivered a real message to a real Telegram
+account through `/start <linkToken>` → `/link` → `/sos` (by hand, with `curl` — recorded in
+[`relay/README.md`](../../relay/README.md#status--read-this-first)). Textbelt is blocked for India
+on the free tier; the relay returned 502 as designed.
+
+**App side (this workstream): Device validated: NO.** The structured dispatch, the per-channel
+overlay and the linking UI are unit/integration tested under Jest against a mocked `fetch`. No
+app build has yet sent an alert through the deployed relay or completed a link from the editor on
+a phone. The composer fallback path is unchanged in code and remains the device-validated SOS path.
+The next validation event is: a development build with `EXPO_PUBLIC_SOS_RELAY_URL` set, one contact
+linked from Settings on the phone, one SOS reaching a second phone on Telegram.
 
 ## Known Limitations
 - Textbelt free tier: one SMS per day **per Worker egress IP**, i.e. effectively one per day for the
@@ -204,6 +320,14 @@ validation event; record it in `docs/PROJECT_STATUS.md` when it happens.
   tenants: "one free SMS per day" may be zero in practice. Validation will tell.
 - `disable_web_page_preview` is sent as the design specified; Telegram now prefers
   `link_preview_options` but still honours the old field.
+- The app's link poll is a foreground activity: React Native suspends JS timers in the background,
+  so a user who leaves the editor to send the link in another app resumes polling on return (the
+  10-minute window is wall time, so an expired token is reported as such rather than polled).
+- A linked chat id is a draft until **Save contact**; a user who links and then cancels has consumed
+  a token for nothing and must link again. The copy says so.
+- `X-PHC-Key` ships in the bundle like any `EXPO_PUBLIC_*` value; the deployed relay currently has
+  no app key set (`/health` reports `appKeySet: false`), which is fine while only free channels are
+  on.
 - No destination allowlist yet (listed in abuse control below as a pilot-cohort measure).
 - FCM is a stub; `msg91` (India DLT) is not implemented (interface note only in the design).
 - The Worker's own tests do not exercise workerd; a plain Node vitest run with a stubbed `fetch` is
@@ -227,11 +351,10 @@ does not log them and does not store them; KV holds only `linkToken → chat_id`
 [`docs/security/privacy-architecture.md`](../security/privacy-architecture.md).
 
 ## Future Improvements
-- **M5 part 1b (app):** `EmergencyContact.telegramChatId`/`pushToken`, structured body,
-  `EXPO_PUBLIC_SOS_RELAY_URL` (old name read for one release), `X-PHC-Key` header, the linking UI
-  (generate a 128-bit `linkToken` with `expo-crypto`, show the `t.me` deep link, poll `/link`),
-  per-channel attempt rows ("sent via Telegram"), Settings copy listing configured channels.
-- **M5 part 2:** FCM adapter (HTTP v1, service-account OAuth) + caregiver role in the app.
+- **M5 part 2:** FCM adapter (HTTP v1, service-account OAuth) + caregiver role in the app
+  (`EmergencyContact.pushToken`, deliberately not added in part 1b).
+- App side: a QR code beside the `t.me` link; `expo-clipboard` for a Copy button if the share sheet
+  proves awkward on a device; drop the legacy `EXPO_PUBLIC_TWILIO_SOS_URL` read after one release.
 - Destination allowlist var for pilot cohorts; KV/Durable-Object-backed limiter if the dashboard rule
   proves insufficient.
 
@@ -251,37 +374,51 @@ user pressing send.
 *(For the controller to merge into the shared docs this workstream must not edit directly.)*
 
 ### `docs/PROJECT_STATUS.md`
-- Replace "Twilio relay + native SMS composer fallback … Relay not deployed" with: "multi-channel
-  relay (Cloudflare Worker in `relay/`: Telegram / Textbelt / Twilio adapters, FCM stub) — *built and
-  unit tested; not deployed; app still sends the legacy body*."
-- Blockers: the Twilio KYC blocker is no longer blocking; the remaining user actions are a Cloudflare
-  account (`wrangler login`), a Telegram bot token (@BotFather) and a second phone for the first
-  delivery test.
+- SOS row: "multi-channel relay deployed at `phc-sos-relay.xreep.workers.dev` — Telegram lane
+  validated by hand 2026-09-21; **app now sends the structured contract, links Telegram per contact
+  and reports per channel (M5 part 1b, Jest-tested, not device validated)**; composer fallback
+  unchanged and still the device-validated path."
+- Next validation event: a dev build with `EXPO_PUBLIC_SOS_RELAY_URL` set, one contact linked from
+  Settings on the phone, one SOS reaching a second phone on Telegram.
 
 ### `docs/ROADMAP.md`
-- Rename "M5 — Twilio relay deployed" to "M5 — multi-channel relay" with parts: **1a** Worker +
-  adapters + linking (this PR), **1b** app dispatch + contact fields + linking UI, **2** FCM +
-  caregiver role.
+- M5: **1a** relay (done, deployed) · **1b** app dispatch + contact field + linking UI (done, not
+  device validated) · **2** FCM + caregiver role (next).
+
+### `README.md`
+- Replace the `.env.local` example line `EXPO_PUBLIC_TWILIO_SOS_URL=https://your-relay/sos` with
+  `EXPO_PUBLIC_SOS_RELAY_URL=https://<worker>/sos` (and mention the optional
+  `EXPO_PUBLIC_SOS_RELAY_KEY`); note the old name is still read for one release.
 
 ### `docs/JUDGE_QA.md` entry
 **Q: How does the SOS reach someone if the user cannot tap send?**
-A: Over any data connection the app posts the alert to a relay we own; the relay delivers it on
-Telegram to a linked caregiver and, when a number is on file, also as an SMS through a gateway —
-neither needs a tap. With no data at all the phone opens a pre-filled SMS that needs one tap,
-because no consumer app on Android or iOS can send an SMS silently. The relay is built and unit
-tested against a mocked network; it is not deployed yet, so today every SOS takes the one-tap path.
+A: Over any data connection the app posts the alert to a relay we run; the relay delivers it on
+Telegram to a caregiver who linked once by tapping a link from the app's Settings, and, when a
+number is on file, also as an SMS through a gateway — neither needs a tap. The screen then says per
+person "Sent to Meera via Telegram". With no data at all the phone opens a pre-filled SMS that needs
+one tap, because no consumer app on Android or iOS can send an SMS silently. The relay's Telegram
+path has delivered a real message; the app-side path is tested against a mocked network and has
+not yet been exercised from a phone.
 
 ### `CHANGELOG.md` fragment
 ```
 ### Added
-- `relay/`: provider-agnostic emergency alert relay as a Cloudflare Worker — Telegram, Textbelt and
-  Twilio adapters (Twilio disabled without credentials), FCM stub, Telegram chat-id linking, per-IP
-  rate limit, optional app key. Accepts the existing app's `{ to, message }` body. vitest suite,
-  CI job, deploy runbook. Not deployed. See `docs/features/sos-relay.md`, ADR-007.
+- SOS dispatch speaks the multi-channel relay's contract (`{ to: { phone, telegramChatId? },
+  message, channels }`, success = 2xx + `delivered: true`, per-channel results); `src/sos/relay.ts`
+  replaces `twilio.ts`. Emergency contacts can link a Telegram chat from Settings via an
+  app-generated 128-bit deep link (`expo-crypto`), polled every 10 s for 10 min. The SOS overlay
+  reports per contact ("Sent to Meera via Telegram", "Opened SMS app for Raj"). Settings shows a
+  Telegram badge on linked contacts.
+### Changed
+- `EXPO_PUBLIC_SOS_RELAY_URL` replaces `EXPO_PUBLIC_TWILIO_SOS_URL` (old name still read for one
+  release); optional `EXPO_PUBLIC_SOS_RELAY_KEY` → `X-PHC-Key`. `SosDispatchResult.twilioSent` →
+  `relayDelivered`; `DispatchOptions.twilio`/`skipTwilio` → `relay`/`skipRelay`. A 2xx without
+  `delivered: true` now falls back to the composer.
 ```
 
 ### `docs/BUILD_MATRIX.md` row(s)
 | Feature | Built | Unit tested | Integration tested | Device validated | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Emergency relay (Worker) | ✅ | ✅ (vitest, 142) | ✅ (router + real adapters over stubbed fetch) | ❌ | Not deployed; no adapter has sent a real message |
-| Telegram linking | ✅ | ✅ | ✅ | ❌ | App UI is M5 part 1b |
+| Emergency relay (Worker) | ✅ | ✅ (vitest, 142) | ✅ | ✅ Telegram lane (by hand, 2026-09-21) | Textbelt blocked for India; Twilio disabled |
+| App → relay dispatch (structured contract) | ✅ | ✅ (Jest) | ✅ (`sos-flow`, mocked fetch) | ❌ | Fallback to composer unchanged |
+| Telegram linking (app UI) | ✅ | ✅ (Jest) | ✅ (settings screen, mocked fetch) | ❌ | Poll 10 s / 10 min; Share sheet only |

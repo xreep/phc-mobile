@@ -18,8 +18,8 @@ the biggest gap identified in `docs/prototype-audit-2026-09-19.md` §H/§K.
 - The **Health Connect Toolbox** app (or a real band/watch whose companion app writes to Health
   Connect), to insert HR/SpO₂/skin-temperature records without needing a physical wearable.
 - A second phone, to receive the SOS SMS.
-- `.env.local` with `EXPO_PUBLIC_OPENWEATHER_API_KEY` set (and `EXPO_PUBLIC_TWILIO_SOS_URL` if the
-  relay step below is included).
+- `.env.local` with `EXPO_PUBLIC_OPENWEATHER_API_KEY` set (and `EXPO_PUBLIC_SOS_RELAY_URL` if the
+  relay step below is included; the legacy `EXPO_PUBLIC_TWILIO_SOS_URL` is still read).
 
 ## Protocol
 
@@ -58,8 +58,10 @@ image). For each OS version, record:
 ### 4. SOS second-phone test
 With Health Connect delivering a critical vital (or using the dev "Simulate a fall" control), let the
 SOS countdown lapse without cancelling. Confirm:
-- If `EXPO_PUBLIC_TWILIO_SOS_URL` is set and the relay is deployed: the second phone receives an SMS
-  with vitals and a maps link within a reasonable time.
+- If `EXPO_PUBLIC_SOS_RELAY_URL` is set and the relay is deployed: a contact linked from Settings
+  (Edit contact → Link Telegram → the second phone taps the link and presses Start → "Linked ✓" →
+  Save) receives the alert on Telegram, and the overlay reads "Sent to <name> via Telegram"; with a
+  working SMS gateway the second phone also receives an SMS with vitals and a maps link.
 - If not configured, or the relay returns non-2xx: the native SMS composer opens, pre-filled,
   addressed to each contact in turn.
 

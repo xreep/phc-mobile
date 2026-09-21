@@ -75,20 +75,22 @@ the Android Keystore (P2, see [`docs/ROADMAP.md`](../ROADMAP.md) M12).
 
 ## Secrets policy
 
-No secret is committed to this repository. `.env.local` is gitignored (`.gitignore`); the two
+No secret is committed to this repository. `.env.local` is gitignored (`.gitignore`); the
 `EXPO_PUBLIC_*` variables it can hold are:
 
 - `EXPO_PUBLIC_OPENWEATHER_API_KEY`
-- `EXPO_PUBLIC_TWILIO_SOS_URL`
+- `EXPO_PUBLIC_SOS_RELAY_URL` (the legacy name `EXPO_PUBLIC_TWILIO_SOS_URL` is still read for one
+  release — see `src/sos/config.ts`)
+- `EXPO_PUBLIC_SOS_RELAY_KEY` (optional; only when the relay deployment set `RELAY_APP_KEY`)
 
-Both are **public-by-design**, not secrets we failed to protect: Expo's Babel transform inlines any
+All are **public-by-design**, not secrets we failed to protect: Expo's Babel transform inlines any
 `EXPO_PUBLIC_*` value into the JS bundle at build time, so anything given that prefix is readable by
 anyone holding the APK, regardless of how carefully it is handled beforehand. The OpenWeatherMap key
-is a rate-limited weather key; the Twilio relay URL is a public endpoint whose own function — not the
-app — holds the real Twilio credentials server-side (see
-[`docs/features/sos-relay.md`](../features/sos-relay.md)). **Both must be rotated before a public
-APK build**, since the August APK and any development build ship whatever values were inlined at
-build time.
+is a rate-limited weather key; the relay URL is a public endpoint whose Worker — not the app — holds
+every provider credential server-side, and the relay app key is documented there as bar-raising, not
+authentication (see [`docs/features/sos-relay.md`](../features/sos-relay.md)). **All must be rotated
+before a public APK build**, since the August APK and any development build ship whatever values
+were inlined at build time.
 
 ## Logging policy
 
