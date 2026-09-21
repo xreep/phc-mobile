@@ -77,6 +77,29 @@ jest.mock('expo-notifications', () => ({
   },
 }));
 
+// `expo-crypto` backs the Telegram link token (`src/sos/telegram-link.ts`). Under Jest the
+// native CSPRNG is absent, so `getRandomValues` fills the array with a fixed, obviously
+// non-random ramp — deterministic on purpose, so a test can pin the exact token a given byte
+// sequence encodes to. Nothing under test depends on these bytes being unpredictable; the
+// property the real module provides (128 bits from the OS CSPRNG) is documented, not tested.
+jest.mock('expo-crypto', () => ({
+  getRandomValues: jest.fn((array) => {
+    for (let i = 0; i < array.length; i += 1) array[i] = (i * 37 + 11) & 0xff;
+    return array;
+  }),
+  getRandomBytes: jest.fn((count) => {
+    const array = new Uint8Array(count);
+    for (let i = 0; i < count; i += 1) array[i] = (i * 37 + 11) & 0xff;
+    return array;
+  }),
+  getRandomBytesAsync: jest.fn((count) => {
+    const array = new Uint8Array(count);
+    for (let i = 0; i < count; i += 1) array[i] = (i * 37 + 11) & 0xff;
+    return Promise.resolve(array);
+  }),
+  randomUUID: jest.fn(() => '00000000-0000-4000-8000-000000000000'),
+}));
+
 // `expo-sqlite` is a native module too. Inert by default — `openDatabaseAsync` rejects — so
 // `ReadingStoreProvider` takes its documented fallback (`MemoryReadingStore`) in every suite and
 // no test ever touches a database file. `src/store/__tests__/sqlite.test.ts` exercises the SQL

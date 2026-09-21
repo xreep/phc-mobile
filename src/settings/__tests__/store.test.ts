@@ -237,6 +237,54 @@ describe('readSettings — validating what a previous build left behind', () => 
     await expect(readSettings()).resolves.toMatchObject({ contacts: [MEERA] });
   });
 
+  it('keeps a linked contact’s Telegram chat id, trimmed', async () => {
+    await seed(
+      JSON.stringify({
+        contacts: [
+          { ...MEERA, telegramChatId: ' 123456789 ' },
+          { ...RAVI, telegramChatId: '-1001234567890' },
+        ],
+      }),
+    );
+
+    const settings = await readSettings();
+
+    expect(settings.contacts).toEqual([
+      { ...MEERA, telegramChatId: '123456789' },
+      { ...RAVI, telegramChatId: '-1001234567890' },
+    ]);
+  });
+
+  it('drops a malformed chat id but keeps the contact', async () => {
+    // The opposite of the phone rule, on purpose: a bad chat id costs the Telegram lane and
+    // the SMS lane still reaches the person, so the contact stays. Dropping the whole contact
+    // for a field that was never load-bearing would make an emergency contact vanish because
+    // a hand-edited blob had a stray character in an optional field.
+    await seed(
+      JSON.stringify({
+        contacts: [
+          { ...MEERA, telegramChatId: 'abc' },
+          { ...RAVI, telegramChatId: 123456789 },
+          { id: 'c3', name: 'Priya', relation: '', phone: '+919000000000', telegramChatId: '' },
+          { id: 'c4', name: 'Anil', relation: '', phone: '+919000000001', telegramChatId: null },
+        ],
+      }),
+    );
+
+    const settings = await readSettings();
+
+    expect(settings.contacts).toEqual([
+      MEERA,
+      RAVI,
+      { id: 'c3', name: 'Priya', relation: '', phone: '+919000000000' },
+      { id: 'c4', name: 'Anil', relation: '', phone: '+919000000001' },
+    ]);
+    // Absent, not `undefined`: a serialised `undefined` key is dropped by JSON anyway, but an
+    // in-memory `{ telegramChatId: undefined }` would still fail a deep-equality check against
+    // a contact that never had the field.
+    expect(Object.keys(settings.contacts[0])).not.toContain('telegramChatId');
+  });
+
   it('builds sharing from the known keys, not from the stored object’s keys', async () => {
     // A pref removed from the app must not linger, and a pref *added* to the app must get its
     // documented default rather than `undefined` — which would read as `false` at every call
@@ -363,6 +411,22 @@ describe('upsertContact', () => {
 
     expect(attempted).toBe(saved);
     expect(attempted.contacts[0].phone).toBe('+919876543210');
+  });
+
+  it('stores a chat id from the linking flow, and drops one that is not a chat id', () => {
+    const linked = upsertContact(DEFAULT_SETTINGS, { ...MEERA, telegramChatId: '123456789' });
+    expect(linked.contacts[0].telegramChatId).toBe('123456789');
+
+    const junk = upsertContact(DEFAULT_SETTINGS, { ...MEERA, telegramChatId: 'not-a-chat-id' });
+    expect(junk.contacts[0]).toEqual(MEERA);
+    expect(Object.keys(junk.contacts[0])).not.toContain('telegramChatId');
+  });
+
+  it('unlinks by saving the contact without the field', () => {
+    const linked = upsertContact(DEFAULT_SETTINGS, { ...MEERA, telegramChatId: '123456789' });
+    const unlinked = upsertContact(linked, MEERA);
+
+    expect(unlinked.contacts[0]).toEqual(MEERA);
   });
 });
 

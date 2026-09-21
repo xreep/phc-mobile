@@ -34,6 +34,7 @@ import type { DataSharingPref, SensorSourceOption } from '@/constants/health-dat
 import { DATA_SHARING_PREFS, DEFAULT_SENSOR_SOURCE, SENSOR_SOURCES } from '@/constants/health-data';
 import { DEFAULT_PROFILE, parseProfile, type UserProfile } from '@/settings/profile';
 import { normalizePhone } from '@/sos/phone';
+import { normalizeTelegramChatId } from '@/sos/telegram-link';
 import type { EmergencyContact } from '@/sos/types';
 
 /** Bump the suffix on any breaking shape change. Old entries then miss rather than
@@ -90,10 +91,14 @@ const SOURCE_KEYS = new Set<string>(SENSOR_SOURCES.map((option) => option.key));
  * Accept a stored contact only if it can still reach someone.
  *
  * The phone number is re-normalized on read rather than trusted. A build that stored numbers
- * in a looser format, or a hand-edited storage blob, would otherwise put a string the Twilio
- * relay rejects into the send path — and the first time anyone finds out is during an
- * emergency. Anything unnormalizable is dropped, which is visible in the UI as a missing
- * contact rather than invisible as a failing send.
+ * in a looser format, or a hand-edited storage blob, would otherwise put a string the relay
+ * rejects into the send path — and the first time anyone finds out is during an emergency.
+ * Anything unnormalizable is dropped, which is visible in the UI as a missing contact rather
+ * than invisible as a failing send.
+ *
+ * The Telegram chat id gets the opposite treatment: a malformed one drops the *field*, never
+ * the contact. It is optional and the SMS lane still reaches the person, so losing a whole
+ * emergency contact over a stray character in it would be the worse failure.
  */
 function parseContact(value: unknown): EmergencyContact | null {
   if (typeof value !== 'object' || value === null) return null;
@@ -106,12 +111,29 @@ function parseContact(value: unknown): EmergencyContact | null {
   const normalized = normalizePhone(phone);
   if (normalized === null) return null;
 
-  return {
-    id,
-    name,
-    relation: typeof relation === 'string' ? relation : '',
-    phone: normalized,
+  return withTelegramChatId(
+    {
+      id,
+      name,
+      relation: typeof relation === 'string' ? relation : '',
+      phone: normalized,
+    },
+    record.telegramChatId,
+  );
+}
+
+/** Attach a validated chat id, or return the contact without the key at all — never with
+ *  `telegramChatId: undefined`, which would make an unlinked contact fail deep equality
+ *  against one that was never linked. */
+function withTelegramChatId(contact: EmergencyContact, raw: unknown): EmergencyContact {
+  const telegramChatId = normalizeTelegramChatId(raw);
+  const bare: EmergencyContact = {
+    id: contact.id,
+    name: contact.name,
+    relation: contact.relation,
+    phone: contact.phone,
   };
+  return telegramChatId === undefined ? bare : { ...bare, telegramChatId };
 }
 
 function parseSharing(value: unknown): SharingPrefs {
@@ -220,7 +242,7 @@ export function upsertContact(
   const phone = normalizePhone(contact.phone);
   if (phone === null) return settings;
 
-  const normalized: EmergencyContact = { ...contact, phone };
+  const normalized = withTelegramChatId({ ...contact, phone }, contact.telegramChatId);
   const index = settings.contacts.findIndex((existing) => existing.id === contact.id);
 
   const contacts =

@@ -310,7 +310,7 @@ describe('the Dashboard’s dev trigger drives fall detection and SOS', () => {
 // ---------------------------------------------------------------------------
 
 const ENDPOINT = 'https://phc-1234.twil.io/sos';
-const originalRelay = process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+const originalRelay = process.env.EXPO_PUBLIC_SOS_RELAY_URL;
 
 const FIX = {
   ok: true as const,
@@ -339,9 +339,17 @@ async function advance(ms: number) {
   });
 }
 
-/** A `fetch` standing in for the user's serverless relay, accepting every contact. */
+/** A `fetch` standing in for the emergency relay, delivering to every contact by SMS gateway. */
 function relay() {
-  return jest.fn(async () => ({ ok: true, status: 200 }) as Response) as unknown as typeof fetch;
+  return jest.fn(
+    async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ results: [{ channel: 'textbelt', ok: true }], delivered: true }),
+      }) as unknown as Response,
+  ) as unknown as typeof fetch;
 }
 
 describe('the simulated fall’s alert reaches a contact with a location', () => {
@@ -353,13 +361,13 @@ describe('the simulated fall’s alert reaches a contact with a location', () =>
       SETTINGS_KEY,
       JSON.stringify({ contacts: [MEERA], userName: 'Asha' }),
     );
-    process.env.EXPO_PUBLIC_TWILIO_SOS_URL = ENDPOINT;
+    process.env.EXPO_PUBLIC_SOS_RELAY_URL = ENDPOINT;
   });
 
   afterEach(() => {
     jest.useRealTimers();
-    if (originalRelay === undefined) delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
-    else process.env.EXPO_PUBLIC_TWILIO_SOS_URL = originalRelay;
+    if (originalRelay === undefined) delete process.env.EXPO_PUBLIC_SOS_RELAY_URL;
+    else process.env.EXPO_PUBLIC_SOS_RELAY_URL = originalRelay;
   });
 
   it('sends the fall reason, the injected vitals, and the resolved coordinates', async () => {
@@ -373,7 +381,7 @@ describe('the simulated fall’s alert reaches a contact with a location', () =>
             resolveLocationImpl: () => Promise.resolve(FIX),
             vibrateImpl: jest.fn(),
             cancelVibrationImpl: jest.fn(),
-            dispatchOptions: { twilio: { endpoint: ENDPOINT, fetchImpl } },
+            dispatchOptions: { relay: { endpoint: ENDPOINT, fetchImpl } },
           }}
         />
       </SettingsProvider>,
@@ -388,7 +396,7 @@ describe('the simulated fall’s alert reaches a contact with a location', () =>
 
     const calls = (fetchImpl as jest.Mock).mock.calls;
     expect(calls).toHaveLength(1);
-    expect(JSON.parse(String(calls[0][1]?.body)).to).toBe('+919876543210');
+    expect(JSON.parse(String(calls[0][1]?.body)).to).toEqual({ phone: '+919876543210' });
 
     // The whole chain in one assertion: injected reading → engine → machine → location →
     // composer → relay. The name comes from settings, the reason from the engine's

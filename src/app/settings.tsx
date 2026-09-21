@@ -12,7 +12,7 @@ import { Spacing } from '@/constants/theme';
 import { useRiskColors, useTheme } from '@/hooks/use-theme';
 import { AGE_BANDS } from '@/settings/profile';
 import { useSettings } from '@/settings/provider';
-import { formatPhoneForDisplay, isTwilioConfigured, type EmergencyContact } from '@/sos';
+import { formatPhoneForDisplay, isRelayConfigured, type EmergencyContact } from '@/sos';
 import { useReadingStore } from '@/store/provider';
 
 /** What the editor is currently doing. `null` closed; `'new'` creating; otherwise editing. */
@@ -46,7 +46,7 @@ export default function SettingsScreen() {
    *  through before storage has resolved. */
   const [nameDraft, setNameDraft] = useState<string | null>(null);
 
-  const relayConfigured = isTwilioConfigured();
+  const relayConfigured = isRelayConfigured();
 
   // M3 alerts. `AlertsProvider` (mounted in `_layout.tsx`) owns the one shared permission state
   // — the Dashboard's `useAlerts` reads the same value, so a grant made here reaches it without a
@@ -147,9 +147,23 @@ export default function SettingsScreen() {
                     ? `${contact.relation} · ${formatPhoneForDisplay(contact.phone)}`
                     : formatPhoneForDisplay(contact.phone)
                 }>
-                <ThemedText type="small" themeColor="textSecondary">
-                  Edit
-                </ThemedText>
+                <View style={styles.rowTrailing}>
+                  {/* Linked contacts get the Telegram lane on top of SMS; the badge is the only
+                      place outside the editor that says which contacts have done the one-time
+                      link, and therefore which ones an SOS reaches without a tap. */}
+                  {contact.telegramChatId !== undefined ? (
+                    <View
+                      accessibilityLabel={`${contact.name}: Telegram linked`}
+                      style={[styles.badge, { backgroundColor: risk.green.bg }]}>
+                      <ThemedText type="small" style={{ color: risk.green.fg }}>
+                        Telegram
+                      </ThemedText>
+                    </View>
+                  ) : null}
+                  <ThemedText type="small" themeColor="textSecondary">
+                    Edit
+                  </ThemedText>
+                </View>
               </SettingRow>
             </Pressable>
           ))
@@ -165,11 +179,15 @@ export default function SettingsScreen() {
       <ThemedText type="smallBold">How SOS sends</ThemedText>
       <Card>
         <SettingRow
-          title={relayConfigured ? 'Automatic relay configured' : 'Automatic relay not configured'}
+          title={
+            relayConfigured
+              ? 'Automatic relay: configured (Telegram + SMS gateway)'
+              : 'Automatic relay: not configured'
+          }
           description={
             relayConfigured
-              ? 'Alerts send by themselves. If the relay cannot be reached, your SMS app opens with the message ready.'
-              : 'Set EXPO_PUBLIC_TWILIO_SOS_URL in .env.local to send automatically. Until then SOS opens your SMS app with the message ready — you press send.'
+              ? 'Alerts send by themselves — on Telegram to contacts who have linked it, and as an SMS through the gateway. If the relay cannot be reached, your SMS app opens with the message ready.'
+              : 'Set EXPO_PUBLIC_SOS_RELAY_URL in .env.local to send automatically. Until then SOS opens your SMS app with the message ready — you press send.'
           }>
           <View
             style={[
@@ -366,6 +384,16 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
+  },
+  rowTrailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  badge: {
+    borderRadius: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 2,
   },
   radio: {
     width: 20,

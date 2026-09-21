@@ -29,6 +29,13 @@ export type EmergencyContact = {
   readonly relation: string;
   /** E.164, including the leading `+`. */
   readonly phone: string;
+  /**
+   * Telegram chat id obtained through the one-time linking flow (`telegram-link.ts`), when the
+   * contact has linked. Digits, optionally with a leading `-` (groups are negative). Validated
+   * on read in `settings/store.ts`: a malformed value drops the *field*, never the contact — a
+   * bad chat id costs the Telegram lane, not the SMS one.
+   */
+  readonly telegramChatId?: string;
 };
 
 /** A resolved position for the alert. Deliberately **not** rounded — see `sos/location.ts`. */
@@ -87,8 +94,15 @@ export type SosContext = {
   readonly manual: boolean;
 };
 
-/** Which path delivered (or tried to). */
-export type SosChannel = 'twilio' | 'native_sms';
+/**
+ * Which path delivered (or tried to).
+ *
+ * The first three are the relay's channels (`relay/src/contract.ts`), named as the relay names
+ * them so a per-channel result row maps straight onto the UI. `native_sms` is the on-device
+ * composer fallback. The relay also knows `fcm`; that arrives with the caregiver role (M5 part
+ * 2) and is dropped from responses until then rather than shown as an unexplained row.
+ */
+export type SosChannel = 'telegram' | 'textbelt' | 'twilio' | 'native_sms';
 
 /** Per-contact, per-channel result. */
 export type SosDeliveryAttempt = {
@@ -98,6 +112,13 @@ export type SosDeliveryAttempt = {
   readonly ok: boolean;
   /** Present when `ok` is false. Human-readable, for the UI and the audit line. */
   readonly error?: string;
+};
+
+/** A contact the relay confirmed, and which of its channels actually carried the alert. */
+export type SosRelayDelivery = {
+  readonly contactId: string;
+  /** Channels the relay reported `ok` for — `['telegram']`, `['telegram', 'textbelt']`, … */
+  readonly channels: readonly SosChannel[];
 };
 
 /**
@@ -110,8 +131,8 @@ export type SosDeliveryAttempt = {
  */
 export type SosDispatchResult = {
   readonly attempts: readonly SosDeliveryAttempt[];
-  /** Contacts the serverless Twilio path confirmed. */
-  readonly twilioSent: readonly string[];
+  /** Contacts the relay confirmed (`delivered: true`), with the channels that succeeded. */
+  readonly relayDelivered: readonly SosRelayDelivery[];
   /** True when the composer was opened as a fallback and needs a user tap. */
   readonly nativeSmsPending: boolean;
   /** True when no path produced anything at all. */

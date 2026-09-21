@@ -16,11 +16,12 @@
 export {
   CANCEL_WINDOW_MS,
   COUNTDOWN_TICK_MS,
-  isTwilioConfigured,
+  isRelayConfigured,
   LOCATION_TIMEOUT_MS,
   REDISPATCH_COOLDOWN_MS,
-  resolveTwilioEndpoint,
-  TWILIO_TIMEOUT_MS,
+  RELAY_TIMEOUT_MS,
+  resolveRelayEndpoint,
+  resolveRelayRoute,
 } from './config';
 
 export { dispatchSos, type DispatchOptions } from './deliver';
@@ -48,9 +49,32 @@ export {
 
 export { sendViaNativeSms, type NativeSmsOptions, type NativeSmsResult } from './native-sms';
 
+export { describeDispatch, type DispatchLine } from './outcome';
+
 export { formatPhoneForDisplay, isValidPhone, normalizePhone } from './phone';
 
-export { sendViaTwilio, type TwilioSendOptions, type TwilioSendResult } from './twilio';
+export {
+  relayChannelsFor,
+  sendViaRelay,
+  type RelayChannelResult,
+  type RelaySendOptions,
+  type RelaySendResult,
+} from './relay';
+
+export {
+  fetchRelayBotUsername,
+  generateLinkToken,
+  isTelegramChatId,
+  LINK_POLL_INTERVAL_MS,
+  LINK_POLL_TIMEOUT_MS,
+  normalizeTelegramChatId,
+  redeemLinkToken,
+  telegramDeepLink,
+  telegramLinkInstructions,
+  type BotUsernameResult,
+  type RedeemResult,
+  type RelayCallOptions,
+} from './telegram-link';
 
 export type {
   EmergencyContact,
@@ -62,5 +86,6 @@ export type {
   SosLocationFailure,
   SosLocationResult,
   SosPhase,
+  SosRelayDelivery,
   SosTrigger,
 } from './types';

@@ -22,11 +22,59 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import type { SosController } from '@/hooks/use-sos';
 import { useRiskColors, useTheme } from '@/hooks/use-theme';
-import { formatPhoneForDisplay } from '@/sos';
+import { describeDispatch, formatPhoneForDisplay } from '@/sos';
+import type { SosDeliveryAttempt, SosDispatchResult } from '@/sos/types';
 
 /** Local alert red. Matches the Dashboard's SOS button rather than the theme, because the
  *  meaning is fixed: this colour means "emergency" in both light and dark. */
 const ALERT_RED = '#C1121F';
+
+/**
+ * "Sent to Meera via Telegram" / "Opened SMS app for Raj" — one line per contact.
+ *
+ * Wording comes from `sos/outcome.ts`, where it is tested as text. Shown in both terminal
+ * phases: after a partial delivery the user needs to see *who* still depends on their tap.
+ */
+function OutcomeLines({
+  result,
+  contacts,
+}: {
+  result: SosDispatchResult;
+  contacts: SosController['contacts'];
+}) {
+  const lines = describeDispatch(result, contacts);
+  if (lines.length === 0) return null;
+  return (
+    <View style={styles.reasons}>
+      {lines.map((line) => (
+        <ThemedText key={line.contactId} type="small">
+          · {line.text}
+        </ThemedText>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * Failure reasons, one per contact per distinct message.
+ *
+ * A relay that was not reached at all leaves the same reason on every channel row for a
+ * contact (`deliver.ts`); showing "timed out" three times per person would read as three
+ * separate faults. Deduplicated by contact and text, not by text alone, so two contacts with
+ * the same problem still get a line each — the list is meant to be read per person.
+ */
+function failureReasons(attempts: readonly SosDeliveryAttempt[]): readonly SosDeliveryAttempt[] {
+  const seen = new Set<string>();
+  const rows: SosDeliveryAttempt[] = [];
+  for (const attempt of attempts) {
+    if (attempt.ok || attempt.error === undefined) continue;
+    const key = `${attempt.contactId}\u0000${attempt.error}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(attempt);
+  }
+  return rows;
+}
 
 function ContactList({ contacts }: { contacts: SosController['contacts'] }) {
   return (
@@ -138,8 +186,9 @@ export function SosAlert({ controller }: { controller: SosController }) {
               <ThemedText type="small" themeColor="textSecondary">
                 {result === null
                   ? 'Your contacts have been alerted.'
-                  : `Delivered to ${result.twilioSent.length === 1 ? '1 contact' : `${result.twilioSent.length} contacts`}.`}
+                  : `Delivered to ${result.relayDelivered.length === 1 ? '1 contact' : `${result.relayDelivered.length} contacts`}.`}
               </ThemedText>
+              {result !== null ? <OutcomeLines result={result} contacts={contacts} /> : null}
               {result !== null ? <SentMessage message={result.message} /> : null}
             </>
           ) : null}
@@ -157,6 +206,7 @@ export function SosAlert({ controller }: { controller: SosController }) {
                 Your SMS app has opened with the message ready. It has <ThemedText type="smallBold">not</ThemedText> been
                 sent yet — press send there to alert your contacts.
               </ThemedText>
+              {result !== null ? <OutcomeLines result={result} contacts={contacts} /> : null}
               {result !== null ? <SentMessage message={result.message} /> : null}
             </>
           ) : null}
@@ -172,16 +222,14 @@ export function SosAlert({ controller }: { controller: SosController }) {
               </ThemedText>
               {result !== null ? (
                 <View style={styles.reasons}>
-                  {result.attempts
-                    .filter((attempt) => !attempt.ok && attempt.error !== undefined)
-                    .map((attempt, index) => (
-                      <ThemedText
-                        key={`${attempt.contactId}-${attempt.channel}-${index}`}
-                        type="small"
-                        themeColor="textSecondary">
-                        · {attempt.error}
-                      </ThemedText>
-                    ))}
+                  {failureReasons(result.attempts).map((attempt, index) => (
+                    <ThemedText
+                      key={`${attempt.contactId}-${attempt.channel}-${index}`}
+                      type="small"
+                      themeColor="textSecondary">
+                      · {attempt.error}
+                    </ThemedText>
+                  ))}
                 </View>
               ) : null}
             </>

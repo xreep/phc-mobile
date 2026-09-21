@@ -14,7 +14,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Alert, type AlertButton } from 'react-native';
+import { Alert, Share, type AlertButton } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { getAlertPermission, requestAlertPermission } from '@/alerts/notify';
@@ -82,22 +82,55 @@ function renderSettings() {
   );
 }
 
-const originalRelay = process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+const originalRelay = process.env.EXPO_PUBLIC_SOS_RELAY_URL;
+const originalLegacyRelay = process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+const originalFetch = globalThis.fetch;
 let readingStore: MemoryReadingStore;
 
 beforeEach(async () => {
   await AsyncStorage.clear();
   readingStore = new MemoryReadingStore();
   mockedOpenSqlite.mockReset().mockRejectedValue(new Error('no sqlite under test'));
+  delete process.env.EXPO_PUBLIC_SOS_RELAY_URL;
   delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
   mockedGetAlertPermission.mockReset().mockResolvedValue('undetermined');
   mockedRequestAlertPermission.mockReset().mockResolvedValue('undetermined');
 });
 
 afterEach(() => {
-  if (originalRelay === undefined) delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
-  else process.env.EXPO_PUBLIC_TWILIO_SOS_URL = originalRelay;
+  if (originalRelay === undefined) delete process.env.EXPO_PUBLIC_SOS_RELAY_URL;
+  else process.env.EXPO_PUBLIC_SOS_RELAY_URL = originalRelay;
+  if (originalLegacyRelay === undefined) delete process.env.EXPO_PUBLIC_TWILIO_SOS_URL;
+  else process.env.EXPO_PUBLIC_TWILIO_SOS_URL = originalLegacyRelay;
+  globalThis.fetch = originalFetch;
 });
+
+const RELAY = 'https://phc-sos-relay.example.workers.dev';
+
+/**
+ * The relay behind the screen's own `fetch` — the editor is rendered by the real Settings screen
+ * with no injection point, so the global is replaced for the test. `/health` names the bot;
+ * `/link` answers 404 `pending` times, then the chat id. Nothing else is reachable.
+ */
+function installRelay({ chatId = '123456789', hold = false }: { chatId?: string; hold?: boolean } = {}) {
+  // With `hold`, `/link` does not answer until `release()` — the only way to observe the
+  // "waiting" state under real timers, since the first poll is immediate.
+  let release: () => void = () => undefined;
+  const gate = hold ? new Promise<void>((resolve) => (release = resolve)) : Promise.resolve();
+  const fetchImpl = jest.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = String(input);
+    const json = (status: number, body: unknown) =>
+      ({ ok: status < 300, status, json: () => Promise.resolve(body) }) as unknown as Response;
+    if (url === `${RELAY}/health`) return json(200, { ok: true, botUsername: 'phc_sos_bot', linking: true });
+    if (url === `${RELAY}/link`) {
+      await gate;
+      return json(200, { telegramChatId: chatId });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  globalThis.fetch = fetchImpl as unknown as typeof fetch;
+  return { fetchImpl, release: () => release() };
+}
 
 /** Open the add-contact sheet and fill it in. */
 async function addContact(
@@ -247,6 +280,140 @@ describe('emergency contacts', () => {
   });
 });
 
+describe('telegram linking', () => {
+  // The token the global expo-crypto mock's bytes encode to (pinned in telegram-link.test.ts).
+  const TOKEN = 'CzBVep_E6Q4zWH2ix-wRNg';
+
+  it('says linking is unavailable when no relay is configured, and still saves by SMS', async () => {
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('+ Add emergency contact')).toBeTruthy());
+
+    await fireEvent.press(screen.getByText('+ Add emergency contact'));
+
+    expect(
+      screen.getByText(
+        'Relay not configured — Telegram linking needs EXPO_PUBLIC_SOS_RELAY_URL. SMS still works.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('Link Telegram')).toBeNull();
+  });
+
+  it('links a contact: bot name from /health, the deep link on screen, the chat id from /link, the badge after save', async () => {
+    process.env.EXPO_PUBLIC_SOS_RELAY_URL = `${RELAY}/sos`;
+    const { fetchImpl, release } = installRelay({ hold: true });
+    const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
+
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('+ Add emergency contact')).toBeTruthy());
+    await addContact(screen, { name: 'Meera', relation: 'Sister', phone: '+919876543210' });
+
+    await fireEvent.press(screen.getByText('Link Telegram'));
+
+    // The link, built from the bot `/health` named and the app-made token — and the manual
+    // `/start` recovery for clients that drop the payload.
+    await waitFor(() =>
+      expect(screen.getByLabelText('Telegram link').props.children).toBe(
+        `https://t.me/phc_sos_bot?start=${TOKEN}`,
+      ),
+    );
+    expect(screen.getByText(/They tap it in Telegram and press Start/)).toBeTruthy();
+    expect(screen.getByText(new RegExp(`/start ${TOKEN} to @phc_sos_bot`))).toBeTruthy();
+    expect(screen.getByText(/Waiting for the contact to press Start/)).toBeTruthy();
+    expect(fetchImpl).toHaveBeenCalledWith(`${RELAY}/health`, expect.objectContaining({ method: 'GET' }));
+
+    // Share goes through the platform sheet with the link and the instructions.
+    await fireEvent.press(screen.getByText('Share link'));
+    expect(share).toHaveBeenCalledTimes(1);
+    expect(share.mock.calls[0][0].message).toContain(`https://t.me/phc_sos_bot?start=${TOKEN}`);
+
+    // The relay answers `/link` with the chat id (the first poll was immediate; it was held).
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByText(/^Linked ✓/)).toBeTruthy());
+    const linkCall = fetchImpl.mock.calls.find(([input]) => String(input) === `${RELAY}/link`);
+    expect(linkCall).toBeDefined();
+    expect(JSON.parse(String(linkCall?.[1]?.body))).toEqual({ linkToken: TOKEN });
+
+    // Not stored until saved — the copy says so.
+    expect(screen.getByText(/Save the contact to keep it/)).toBeTruthy();
+    await fireEvent.press(screen.getByText('Save contact'));
+
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.contacts).toEqual([
+        expect.objectContaining({ name: 'Meera', phone: '+919876543210', telegramChatId: '123456789' }),
+      ]);
+    });
+    // And the list shows it.
+    expect(screen.getByText('Telegram')).toBeTruthy();
+    expect(screen.getByLabelText('Meera: Telegram linked')).toBeTruthy();
+    share.mockRestore();
+  });
+
+  it('shows the badge for a contact linked in an earlier session', async () => {
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        contacts: [
+          { id: 'c1', name: 'Meera', relation: 'Sister', phone: '+919876543210', telegramChatId: '123456789' },
+          { id: 'c2', name: 'Ravi', relation: '', phone: '+919123456780' },
+        ],
+      }),
+    );
+
+    const screen = await renderSettings();
+
+    await waitFor(() => expect(screen.getByLabelText('Meera: Telegram linked')).toBeTruthy());
+    expect(screen.queryByLabelText('Ravi: Telegram linked')).toBeNull();
+    expect(screen.getAllByText('Telegram')).toHaveLength(1);
+  });
+
+  it('unlinks by clearing the field on save', async () => {
+    process.env.EXPO_PUBLIC_SOS_RELAY_URL = `${RELAY}/sos`;
+    installRelay();
+    await AsyncStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        contacts: [
+          { id: 'c1', name: 'Meera', relation: 'Sister', phone: '+919876543210', telegramChatId: '123456789' },
+        ],
+      }),
+    );
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('Meera')).toBeTruthy());
+
+    await fireEvent.press(screen.getByText('Meera'));
+    expect(screen.getByText(/^Linked ✓/)).toBeTruthy();
+    await fireEvent.press(screen.getByText('Unlink Telegram'));
+    expect(screen.getByText('Link Telegram')).toBeTruthy();
+    await fireEvent.press(screen.getByText('Save contact'));
+
+    await waitFor(async () => {
+      const stored = await readSettings();
+      expect(stored.contacts).toEqual([
+        { id: 'c1', name: 'Meera', relation: 'Sister', phone: '+919876543210' },
+      ]);
+    });
+    expect(screen.queryByLabelText('Meera: Telegram linked')).toBeNull();
+  });
+
+  it('discards an unsaved link on cancel', async () => {
+    // "Linked ✓" in the editor is a draft. The store never heard about it until Save, and the
+    // list must not show a badge for a link the user backed out of.
+    process.env.EXPO_PUBLIC_SOS_RELAY_URL = `${RELAY}/sos`;
+    installRelay();
+    const screen = await renderSettings();
+    await waitFor(() => expect(screen.getByText('+ Add emergency contact')).toBeTruthy());
+    await addContact(screen, { name: 'Meera', phone: '+919876543210' });
+
+    await fireEvent.press(screen.getByText('Link Telegram'));
+    await waitFor(() => expect(screen.getByText(/^Linked ✓/)).toBeTruthy());
+    await fireEvent.press(screen.getByText('Cancel'));
+
+    await expect(readSettings()).resolves.toMatchObject({ contacts: [] });
+    expect(screen.queryByText('Telegram')).toBeNull();
+  });
+});
+
 describe('your name', () => {
   it('persists on blur, trimmed', async () => {
     const screen = await renderSettings();
@@ -275,20 +442,33 @@ describe('how SOS sends', () => {
   it('says the relay is unconfigured, and what that means for the user', async () => {
     const screen = await renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Automatic relay not configured')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Automatic relay: not configured')).toBeTruthy());
     expect(
       screen.getByText(
-        'Set EXPO_PUBLIC_TWILIO_SOS_URL in .env.local to send automatically. Until then SOS opens your SMS app with the message ready — you press send.',
+        'Set EXPO_PUBLIC_SOS_RELAY_URL in .env.local to send automatically. Until then SOS opens your SMS app with the message ready — you press send.',
       ),
     ).toBeTruthy();
   });
 
-  it('says the relay is configured when it is', async () => {
+  it('says the relay is configured, and which channels that means', async () => {
+    process.env.EXPO_PUBLIC_SOS_RELAY_URL = 'https://phc-sos-relay.example.workers.dev/sos';
+
+    const screen = await renderSettings();
+
+    await waitFor(() =>
+      expect(screen.getByText('Automatic relay: configured (Telegram + SMS gateway)')).toBeTruthy(),
+    );
+  });
+
+  it('still reads the legacy variable name for one release', async () => {
+    // A `.env.local` written for the Twilio-only build keeps the relay configured.
     process.env.EXPO_PUBLIC_TWILIO_SOS_URL = 'https://phc-1234.twil.io/sos';
 
     const screen = await renderSettings();
 
-    await waitFor(() => expect(screen.getByText('Automatic relay configured')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('Automatic relay: configured (Telegram + SMS gateway)')).toBeTruthy(),
+    );
   });
 
   it('states the composer limitation in calm conditions', async () => {
