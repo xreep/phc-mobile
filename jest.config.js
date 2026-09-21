@@ -37,10 +37,12 @@ module.exports = {
   // would otherwise be collected as duplicate suites.
   // Anchored to this checkout: a worktree that itself lives under `.claude/worktrees/` must still
   // see its own tests, so the pattern matches `<rootDir>/.claude/`, not any `.claude/` segment.
-  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/', '<rootDir>/.claude/'],
+  // `relay/` is the Cloudflare Worker with its own vitest suites (`cd relay && npm test`), not
+  // Jest ones.
+  testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/', '/dist/', '/.expo/', '<rootDir>/.claude/', '<rootDir>/relay/'],
   // Generated native build output duplicates package.json files, which confuses
   // the module map.
-  modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/', '<rootDir>/.claude/'],
+  modulePathIgnorePatterns: ['<rootDir>/android/', '<rootDir>/ios/', '<rootDir>/.claude/', '<rootDir>/relay/'],
 
   collectCoverageFrom: ['src/**/*.{ts,tsx}', '!src/**/*.d.ts'],
 };

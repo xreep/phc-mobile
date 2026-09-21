@@ -21,5 +21,9 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
-  ]
+  ],
+  // `relay/` is the Cloudflare Worker (its own package.json, tsconfig and Workers types);
+  // the app's `tsc --noEmit` must not compile it under jest/expo types. Setting `exclude`
+  // replaces the default list, so `node_modules` is restated.
+  "exclude": ["node_modules", "relay"]
 }
