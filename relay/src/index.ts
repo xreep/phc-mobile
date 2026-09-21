@@ -2,13 +2,15 @@
  * PHC emergency alert relay — Cloudflare Worker entry point.
  *
  *   POST /sos               deliver one alert to one contact over the configured channels
- *   POST /link              exchange a Telegram link code for a chat id (one-time)
- *   POST /telegram/webhook  Telegram bot updates (`/start` → link code)
+ *   POST /link              redeem a Telegram link token for a chat id (one-time; 404 until tapped)
+ *   POST /telegram/webhook  Telegram bot updates (`/start <linkToken>` → chat id stored)
  *   GET  /health            liveness + which adapters are configured (no secrets)
  *
  * The phone knows this Worker's URL and nothing else; every provider credential lives in the
  * Worker environment. The URL is public by design — see docs/features/sos-relay.md for the abuse
- * model — so `/sos` and `/link` sit behind an optional shared app key and a per-IP rate limit.
+ * model — so `/sos` and `/link` sit behind a shared app key (optional for free channels,
+ * **required** once a paid SMS channel is configured) and a per-IP rate limit, and the webhook
+ * refuses to run without its secret. Misconfiguration fails closed with a 503, never open.
  *
  * Nothing in this file logs a request body, a phone number or a chat id.
  */
@@ -18,10 +20,10 @@ import { telegram } from './adapters/telegram';
 import { textbelt } from './adapters/textbelt';
 import { twilio } from './adapters/twilio';
 import type { SendOptions } from './adapters/types';
-import { parseChannelOrder, validateLinkRequest, validateSosRequest } from './contract';
+import { MAX_BODY_BYTES, parseChannelOrder, validateLinkRequest, validateSosRequest } from './contract';
 import { type AdapterMap, configuredChannels, dispatch, type DispatchOptions } from './dispatch';
-import { type Env, flag, positiveInt } from './env';
-import { handleTelegramUpdate, type LinkStore, redeemLinkCode } from './link';
+import { appKeySet, type Env, flag, paidSmsConfigured, positiveInt, webhookSecretSet } from './env';
+import { handleTelegramUpdate, type LinkStore, redeemLink } from './link';
 import { clientKey, RateLimiter } from './ratelimit';
 
 export const ADAPTERS: AdapterMap = { telegram, textbelt, twilio, fcm };
@@ -36,8 +38,6 @@ export interface HandlerDeps {
   readonly limiter?: RateLimiter;
   readonly dispatchOptions?: DispatchOptions;
   readonly sendOptions?: SendOptions;
-  /** Deterministic link codes in tests. */
-  readonly random?: (max: number) => number;
 }
 
 function json(status: number, body: unknown): Response {
@@ -58,11 +58,22 @@ export function safeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-async function parseJsonBody(request: Request): Promise<{ ok: true; body: unknown } | { ok: false }> {
+type ParsedBody = { ok: true; body: unknown } | { ok: false; response: Response };
+
+/** Size-capped JSON body. The cap is checked on the header before any bytes are parsed. */
+async function parseJsonBody(request: Request): Promise<ParsedBody> {
+  const declared = Number.parseInt(request.headers.get('Content-Length') ?? '', 10);
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return { ok: false, response: json(413, { error: `body must be at most ${MAX_BODY_BYTES} bytes` }) };
+  }
   try {
-    return { ok: true, body: await request.json() };
+    const text = await request.text();
+    if (text.length > MAX_BODY_BYTES) {
+      return { ok: false, response: json(413, { error: `body must be at most ${MAX_BODY_BYTES} bytes` }) };
+    }
+    return { ok: true, body: JSON.parse(text) as unknown };
   } catch {
-    return { ok: false };
+    return { ok: false, response: json(400, { error: 'body must be JSON' }) };
   }
 }
 
@@ -80,10 +91,14 @@ export function createHandler(deps: HandlerDeps = {}) {
 
   /** Shared gate for the two app-facing endpoints. Returns a response to send, or null to proceed. */
   const gate = (request: Request, env: Env): Response | null => {
-    const appKey = env.RELAY_APP_KEY;
-    if (appKey !== undefined && appKey.length > 0) {
+    // Fail closed: a leaked public URL must never be able to spend money. Free channels
+    // (Telegram, free-tier Textbelt) may run without a key; a paid SMS channel may not.
+    if (!appKeySet(env) && paidSmsConfigured(env)) {
+      return json(503, { error: 'RELAY_APP_KEY required when a paid SMS channel is configured' });
+    }
+    if (appKeySet(env)) {
       const presented = request.headers.get(APP_KEY_HEADER) ?? '';
-      if (!safeEqual(presented, appKey)) return json(401, { error: 'invalid app key' });
+      if (!safeEqual(presented, env.RELAY_APP_KEY ?? '')) return json(401, { error: 'invalid app key' });
     }
     if (!limiterFor(env).allow(clientKey(request))) {
       return json(429, { error: 'rate limited' });
@@ -98,13 +113,19 @@ export function createHandler(deps: HandlerDeps = {}) {
     try {
       if (path === '/health') {
         if (request.method !== 'GET') return json(405, { error: 'method not allowed' });
+        const botUsername = env.BOT_USERNAME?.trim().replace(/^@/, '') ?? '';
         return json(200, {
           ok: true,
           service: 'phc-sos-relay',
           channels: configuredChannels(adapters, env),
           channelOrder: parseChannelOrder(env.CHANNEL_ORDER),
           smsAlways: flag(env.SMS_ALWAYS, true),
+          // Misconfiguration is visible here so a deploy can be checked before the first alert.
+          appKeyRequired: paidSmsConfigured(env),
+          appKeySet: appKeySet(env),
+          webhookSecured: webhookSecretSet(env),
           linking: typeof env.LINKS === 'object' && env.LINKS !== null,
+          botUsername: botUsername.length > 0 ? botUsername : null,
         });
       }
 
@@ -114,7 +135,7 @@ export function createHandler(deps: HandlerDeps = {}) {
         if (denied !== null) return denied;
 
         const parsed = await parseJsonBody(request);
-        if (!parsed.ok) return json(400, { error: 'body must be JSON' });
+        if (!parsed.ok) return parsed.response;
         const validated = validateSosRequest(parsed.body);
         if (!validated.ok) return json(400, { error: validated.error });
 
@@ -133,32 +154,32 @@ export function createHandler(deps: HandlerDeps = {}) {
         if (denied !== null) return denied;
 
         const parsed = await parseJsonBody(request);
-        if (!parsed.ok) return json(400, { error: 'body must be JSON' });
+        if (!parsed.ok) return parsed.response;
         const validated = validateLinkRequest(parsed.body);
         if (!validated.ok) return json(400, { error: validated.error });
 
-        const chatId = await redeemLinkCode(linkStore(env), validated.value.code);
-        if (chatId === null) return json(404, { error: 'unknown or expired code' });
+        // 404 until the caregiver taps the deep link; the app polls. One-time on success.
+        const chatId = await redeemLink(linkStore(env), validated.value.linkToken);
+        if (chatId === null) return json(404, { error: 'not linked yet, expired or already used' });
         return json(200, { telegramChatId: chatId });
       }
 
       if (path === '/telegram/webhook') {
         if (request.method !== 'POST') return json(405, { error: 'method not allowed' });
-        const secret = env.TELEGRAM_WEBHOOK_SECRET;
-        if (secret !== undefined && secret.length > 0) {
-          const presented = request.headers.get(TELEGRAM_SECRET_HEADER) ?? '';
-          if (!safeEqual(presented, secret)) return json(401, { error: 'invalid webhook secret' });
+        // Fail closed: without a secret anyone could POST forged `/start` updates and have the
+        // bot message arbitrary chats. The runbook makes `setWebhook … secret_token=` mandatory.
+        if (!webhookSecretSet(env)) return json(503, { error: 'webhook secret not configured' });
+        const presented = request.headers.get(TELEGRAM_SECRET_HEADER) ?? '';
+        if (!safeEqual(presented, env.TELEGRAM_WEBHOOK_SECRET ?? '')) {
+          return json(401, { error: 'invalid webhook secret' });
         }
 
         const parsed = await parseJsonBody(request);
-        if (!parsed.ok) return json(400, { error: 'body must be JSON' });
+        if (!parsed.ok) return parsed.response;
 
-        const outcome = await handleTelegramUpdate(parsed.body, env, linkStore(env), {
-          ...deps.sendOptions,
-          ...(deps.random === undefined ? {} : { random: deps.random }),
-        });
-        // Always 2xx once authenticated: Telegram retries non-2xx, and a retried `/start` would
-        // mint a second code. The outcome kind is safe to return; it names no chat id.
+        const outcome = await handleTelegramUpdate(parsed.body, env, linkStore(env), deps.sendOptions ?? {});
+        // Always 2xx once authenticated: Telegram retries non-2xx. The outcome kind is safe to
+        // return; it names no chat id and no token.
         return json(200, { ok: true, handled: outcome.kind });
       }
 

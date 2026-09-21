@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_MESSAGE_LENGTH, parseChannelOrder, validateLinkRequest, validateSosRequest } from '../src/contract';
-import { CHAT_ID, MESSAGE, PHONE } from './helpers/env';
+import { CHAT_ID, LINK_TOKEN_A, MESSAGE, PHONE } from './helpers/env';
 
 describe('validateSosRequest', () => {
   it('accepts the legacy { to: "<phone>", message } body the current app sends', () => {
@@ -79,19 +79,24 @@ describe('validateSosRequest', () => {
 });
 
 describe('validateLinkRequest', () => {
-  it('accepts six digits as a string or a number', () => {
-    expect(validateLinkRequest({ code: '012345' })).toEqual({ ok: true, value: { code: '012345' } });
-    expect(validateLinkRequest({ code: ' 987654 ' })).toEqual({ ok: true, value: { code: '987654' } });
-    expect(validateLinkRequest({ code: 123456 })).toEqual({ ok: true, value: { code: '123456' } });
+  it('accepts a 22-character base64url token, trimmed', () => {
+    expect(validateLinkRequest({ linkToken: LINK_TOKEN_A })).toEqual({ ok: true, value: { linkToken: LINK_TOKEN_A } });
+    expect(validateLinkRequest({ linkToken: ` ${LINK_TOKEN_A} ` })).toEqual({ ok: true, value: { linkToken: LINK_TOKEN_A } });
   });
 
-  it.each([[{}], [{ code: '12345' }], [{ code: '1234567' }], [{ code: 'abcdef' }], [{ code: null }], ['nope']])(
-    'rejects %j',
-    (body) => {
-      const result = validateLinkRequest(body);
-      expect(result.ok).toBe(false);
-    },
-  );
+  it.each([
+    [{}],
+    [{ code: '123456' }],
+    [{ linkToken: '123456' }],
+    [{ linkToken: LINK_TOKEN_A.slice(1) }],
+    [{ linkToken: `${LINK_TOKEN_A}A` }],
+    [{ linkToken: 'AbCdEfGhIjKlMnOpQrSt+/' }],
+    [{ linkToken: 42 }],
+    [{ linkToken: null }],
+    ['nope'],
+  ])('rejects %j', (body) => {
+    expect(validateLinkRequest(body)).toEqual({ ok: false, error: expect.any(String) });
+  });
 });
 
 describe('parseChannelOrder', () => {

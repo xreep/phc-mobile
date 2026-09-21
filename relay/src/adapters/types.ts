@@ -9,8 +9,10 @@
  *   a token, key, or URL with credentials in it.
  * - Nothing is logged. The message and the destination are the only health data that leave the
  *   phone, and they must not end up in Workers Logs.
- * - Every upstream call carries `AbortSignal.timeout(timeoutMs)` so a hung provider cannot eat the
- *   phone's own 10-second budget for the whole relay call.
+ * - Every upstream call carries `AbortSignal.timeout(timeoutMs)`. The phone gives the whole relay
+ *   call 10 s, so one adapter gets `DEFAULT_TIMEOUT_MS` (3.5 s) and the dispatcher enforces an
+ *   8 s deadline across all of them (src/dispatch.ts) — a hung provider must never leave the SMS
+ *   fallback with no time to run.
  */
 
 import type { ChannelName, Destination } from '../contract';
@@ -38,7 +40,7 @@ export interface Adapter {
   send(to: Destination, message: string, env: Env, options?: SendOptions): Promise<SendResult>;
 }
 
-export const DEFAULT_TIMEOUT_MS = 10_000;
+export const DEFAULT_TIMEOUT_MS = 3_500;
 
 /** Run `fetch` with a timeout and map every failure mode to a `SendResult`-style error string. */
 export async function upstream(

@@ -2,15 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { TELEGRAM_API_BASE } from '../src/adapters/telegram';
 import {
-  createLinkCode,
   handleTelegramUpdate,
+  isLinkToken,
   LINK_TTL_SECONDS,
-  linkCodeMessage,
-  randomCode,
-  redeemLinkCode,
+  LINKED_MESSAGE,
+  redeemLink,
   START_HELP,
+  storeLink,
+  telegramDeepLink,
 } from '../src/link';
-import { CHAT_ID, FAKE, makeEnv } from './helpers/env';
+import { CHAT_ID, FAKE, LINK_TOKEN_A, LINK_TOKEN_B, makeEnv } from './helpers/env';
 import { FakeKV } from './helpers/fake-kv';
 import { stubFetchJson, stubFetchNetworkError } from './helpers/fetch';
 
@@ -19,59 +20,57 @@ function clock(start = 1_700_000_000_000) {
   return { now: () => now, advance: (ms: number) => (now += ms) };
 }
 
-describe('link codes', () => {
-  it('randomCode is six zero-padded digits', () => {
-    expect(randomCode(() => 7)).toBe('000007');
-    expect(randomCode(() => 999_999)).toBe('999999');
-    expect(randomCode()).toMatch(/^\d{6}$/);
+describe('link tokens', () => {
+  it('accepts exactly 22 base64url characters', () => {
+    expect(isLinkToken(LINK_TOKEN_A)).toBe(true);
+    expect(isLinkToken('A'.repeat(22))).toBe(true);
+    expect(isLinkToken('A'.repeat(21))).toBe(false);
+    expect(isLinkToken('A'.repeat(23))).toBe(false);
+    expect(isLinkToken('A'.repeat(20) + '+/')).toBe(false); // standard base64, not base64url
+    expect(isLinkToken('A'.repeat(20) + '==')).toBe(false); // padding
+    expect(isLinkToken('123456')).toBe(false); // the old six-digit code shape is gone
   });
 
-  it('createLinkCode stores chat id under the code with a 10-minute TTL', async () => {
+  it('builds the deep link with or without a leading @', () => {
+    expect(telegramDeepLink('phc_bot', LINK_TOKEN_A)).toBe(`https://t.me/phc_bot?start=${LINK_TOKEN_A}`);
+    expect(telegramDeepLink('@phc_bot', LINK_TOKEN_A)).toBe(`https://t.me/phc_bot?start=${LINK_TOKEN_A}`);
+  });
+
+  it('storeLink keeps the chat id under the token with a 10-minute TTL', async () => {
     const kv = new FakeKV();
-    const code = await createLinkCode(kv, CHAT_ID, () => 123_456);
-    expect(code).toBe('123456');
-    expect(kv.puts).toEqual([{ key: 'link:123456', value: CHAT_ID, expirationTtl: LINK_TTL_SECONDS }]);
+    await storeLink(kv, LINK_TOKEN_A, CHAT_ID);
+    expect(kv.puts).toEqual([{ key: `link:${LINK_TOKEN_A}`, value: CHAT_ID, expirationTtl: LINK_TTL_SECONDS }]);
     expect(LINK_TTL_SECONDS).toBe(600);
   });
 
-  it('retries on collision with a live code', async () => {
+  it('redeemLink is one-time', async () => {
     const kv = new FakeKV();
-    const draws = [111_111, 111_111, 222_222];
-    const first = await createLinkCode(kv, 'chat-a', () => draws.shift()!);
-    const second = await createLinkCode(kv, 'chat-b', () => draws.shift()!);
-    expect(first).toBe('111111');
-    expect(second).toBe('222222');
-    expect(await kv.get('link:111111')).toBe('chat-a');
-    expect(await kv.get('link:222222')).toBe('chat-b');
-  });
-
-  it('gives up after repeated collisions instead of overwriting', async () => {
-    const kv = new FakeKV();
-    await createLinkCode(kv, 'chat-a', () => 5);
-    await expect(createLinkCode(kv, 'chat-b', () => 5)).rejects.toThrow('could not allocate a link code');
-    expect(await kv.get('link:000005')).toBe('chat-a');
-  });
-
-  it('redeemLinkCode is one-time', async () => {
-    const kv = new FakeKV();
-    const code = await createLinkCode(kv, CHAT_ID, () => 424_242);
-    expect(await redeemLinkCode(kv, code)).toBe(CHAT_ID);
-    expect(await redeemLinkCode(kv, code)).toBeNull();
+    await storeLink(kv, LINK_TOKEN_A, CHAT_ID);
+    expect(await redeemLink(kv, LINK_TOKEN_A)).toBe(CHAT_ID);
+    expect(await redeemLink(kv, LINK_TOKEN_A)).toBeNull();
     expect(kv.size).toBe(0);
   });
 
-  it('redeemLinkCode returns null for an unknown code', async () => {
-    expect(await redeemLinkCode(new FakeKV(), '000000')).toBeNull();
+  it('redeemLink returns null before the caregiver has tapped', async () => {
+    expect(await redeemLink(new FakeKV(), LINK_TOKEN_A)).toBeNull();
   });
 
-  it('a code expires after ten minutes', async () => {
+  it('a link expires after ten minutes', async () => {
     const time = clock();
     const kv = new FakeKV(time.now);
-    const code = await createLinkCode(kv, CHAT_ID, () => 777_777);
+    await storeLink(kv, LINK_TOKEN_A, CHAT_ID);
     time.advance(LINK_TTL_SECONDS * 1000 - 1);
-    expect(await kv.get(`link:${code}`)).toBe(CHAT_ID);
+    expect(await kv.get(`link:${LINK_TOKEN_A}`)).toBe(CHAT_ID);
     time.advance(1);
-    expect(await redeemLinkCode(kv, code)).toBeNull();
+    expect(await redeemLink(kv, LINK_TOKEN_A)).toBeNull();
+  });
+
+  it('two tokens link two chats independently', async () => {
+    const kv = new FakeKV();
+    await storeLink(kv, LINK_TOKEN_A, 'chat-a');
+    await storeLink(kv, LINK_TOKEN_B, 'chat-b');
+    expect(await redeemLink(kv, LINK_TOKEN_B)).toBe('chat-b');
+    expect(await redeemLink(kv, LINK_TOKEN_A)).toBe('chat-a');
   });
 });
 
@@ -82,35 +81,46 @@ describe('handleTelegramUpdate', () => {
     message: { message_id: 1, text, chat: { id: chatId, type: 'private' }, from: { id: chatId, is_bot: false, first_name: 'A' } },
   });
 
-  it('on /start mints a code, stores it, and replies with the code message', async () => {
+  it('on `/start <token>` stores the chat id under the token and replies "linked"', async () => {
     const stub = stubFetchJson(200, { ok: true });
     const kv = new FakeKV();
-    const outcome = await handleTelegramUpdate(update('/start'), env, kv, { random: () => 314_159 });
+    const outcome = await handleTelegramUpdate(update(`/start ${LINK_TOKEN_A}`), env, kv);
 
-    expect(outcome).toEqual({ kind: 'code', chatId: '123456789', code: '314159' });
-    expect(await kv.get('link:314159')).toBe('123456789');
+    expect(outcome).toEqual({ kind: 'linked', chatId: '123456789', linkToken: LINK_TOKEN_A });
+    expect(await kv.get(`link:${LINK_TOKEN_A}`)).toBe('123456789');
     expect(stub.calls).toHaveLength(1);
     expect(stub.calls[0]!.url).toBe(`${TELEGRAM_API_BASE}/bot${FAKE.telegramToken}/sendMessage`);
-    expect(stub.calls[0]!.json).toMatchObject({ chat_id: '123456789', text: linkCodeMessage('314159') });
-    expect(linkCodeMessage('314159')).toBe(
-      'Your PHC link code is 314159 — enter it in the PHC app under Emergency contacts. Expires in 10 minutes.',
-    );
+    expect(stub.calls[0]!.json).toMatchObject({ chat_id: '123456789', text: LINKED_MESSAGE });
+    expect(LINKED_MESSAGE).toBe('Linked to PHC. You will receive emergency alerts here.');
   });
 
-  it('accepts /start with a deep-link payload and a bot mention', async () => {
+  it('accepts the bot-mention form', async () => {
     stubFetchJson(200, { ok: true });
-    expect((await handleTelegramUpdate(update('/start abc'), env, new FakeKV())).kind).toBe('code');
-    expect((await handleTelegramUpdate(update('/start@phc_bot'), env, new FakeKV())).kind).toBe('code');
+    const kv = new FakeKV();
+    expect((await handleTelegramUpdate(update(`/start@phc_bot ${LINK_TOKEN_A}`), env, kv)).kind).toBe('linked');
   });
 
-  it('replies with help for any other text and stores nothing', async () => {
+  it.each([
+    ['/start'],
+    ['/start '],
+    ['/start 123456'],
+    [`/start ${LINK_TOKEN_A}x`],
+    [`/start ${LINK_TOKEN_A} extra`],
+    ['/start A'.padEnd(80, 'A')],
+    ['hello?'],
+  ])('replies with help and stores nothing for %j', async (text) => {
     const stub = stubFetchJson(200, { ok: true });
     const kv = new FakeKV();
-    const outcome = await handleTelegramUpdate(update('hello?'), env, kv);
+    const outcome = await handleTelegramUpdate(update(text), env, kv);
     expect(outcome).toEqual({ kind: 'help', chatId: '123456789' });
     expect(kv.size).toBe(0);
     expect(stub.calls[0]!.json).toMatchObject({ text: START_HELP });
-    expect(START_HELP).not.toMatch(/diagnos/i);
+  });
+
+  it('help and linked copy talk about emergency alerts, never a diagnosis', () => {
+    expect(START_HELP).toMatch(/emergency alerts/);
+    expect(LINKED_MESSAGE).toMatch(/emergency alerts/);
+    expect(`${START_HELP} ${LINKED_MESSAGE}`).not.toMatch(/diagnos/i);
   });
 
   it('ignores updates without a message text or chat', async () => {
@@ -124,23 +134,23 @@ describe('handleTelegramUpdate', () => {
   it('ignores everything when no bot token is configured', async () => {
     const stub = stubFetchJson(200, { ok: true });
     const kv = new FakeKV();
-    expect(await handleTelegramUpdate(update('/start'), makeEnv(), kv)).toEqual({ kind: 'ignored' });
+    expect(await handleTelegramUpdate(update(`/start ${LINK_TOKEN_A}`), makeEnv(), kv)).toEqual({ kind: 'ignored' });
     expect(kv.size).toBe(0);
     expect(stub.mock).not.toHaveBeenCalled();
   });
 
-  it('a failed reply does not throw and the code stays stored', async () => {
+  it('a failed reply does not throw and the link stays stored', async () => {
     stubFetchNetworkError();
     const kv = new FakeKV();
-    const outcome = await handleTelegramUpdate(update('/start'), env, kv, { random: () => 1 });
-    expect(outcome).toEqual({ kind: 'code', chatId: '123456789', code: '000001' });
-    expect(await kv.get('link:000001')).toBe('123456789');
+    const outcome = await handleTelegramUpdate(update(`/start ${LINK_TOKEN_A}`), env, kv);
+    expect(outcome).toEqual({ kind: 'linked', chatId: '123456789', linkToken: LINK_TOKEN_A });
+    expect(await kv.get(`link:${LINK_TOKEN_A}`)).toBe('123456789');
   });
 
   it('stringifies numeric and string chat ids alike', async () => {
     stubFetchJson(200, { ok: true });
     const kv = new FakeKV();
-    await handleTelegramUpdate(update('/start', '-1001'), env, kv, { random: () => 2 });
-    expect(await kv.get('link:000002')).toBe('-1001');
+    await handleTelegramUpdate(update(`/start ${LINK_TOKEN_A}`, '-1001'), env, kv);
+    expect(await kv.get(`link:${LINK_TOKEN_A}`)).toBe('-1001');
   });
 });

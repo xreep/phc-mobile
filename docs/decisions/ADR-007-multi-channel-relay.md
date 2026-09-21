@@ -55,14 +55,29 @@ Specific choices inside the decision:
   exists (`SMS_ALWAYS=true`).** Telegram reaching a phone does not mean the caregiver saw it; an
   SMS lights the lock screen. Exactly one SMS adapter runs after a data success so a free-tier day's
   quota is not doubled.
-- **Telegram linking via a six-digit one-time code** minted by the bot on `/start`, held in KV for
-  ten minutes. A bot can only message a chat that opened it first, and this keeps phone numbers,
-  names and health data out of the linking flow entirely.
+- **Telegram linking via an app-generated 128-bit deep-link token**, not a typed code. The app
+  makes a random base64url token (22 chars) and shows `https://t.me/<bot>?start=<token>`; the
+  caregiver's tap delivers `/start <token>` to the webhook, which stores `token → chat_id` in KV for
+  ten minutes; the app polls `/link` and redeems it once. A six-digit code (the first draft) is
+  10^6 guesses in a ten-minute window — a per-IP limit does not make that safe against a
+  distributed guesser, and a guessed code hands an attacker a caregiver's chat id. 128 bits are
+  not guessable in any window and only the caregiver's Telegram client sees the token. Caveat: KV
+  is eventually consistent (up to ~60 s across edge locations), so one-time redemption is exact
+  where the delete happens and best-effort elsewhere inside that window; the token is worthless
+  once the app holds the chat id, so the exposure is a duplicate read, not a leak. A bot can only
+  message a chat that opened it first, and this keeps phone numbers, names and health data out of
+  the linking flow entirely.
 - **Secrets only in Worker env** (`wrangler secret put`); `wrangler.toml` holds none; the repo
   holds none; tests use fake tokens.
-- **Abuse control** for a public URL: optional shared `X-PHC-Key` (documented as bar-raising, not
-  authentication — it ships in the bundle), an in-isolate per-IP token bucket (best-effort), and a
-  Cloudflare dashboard rate-limiting rule as the enforcement that actually holds.
+- **Abuse control fails closed.** A shared `X-PHC-Key` (bar-raising, not authentication — it
+  ships in the bundle) is optional for the free channels and **required** once a paid SMS channel
+  is configured: `/sos` answers 503 rather than run as an open paid relay. The Telegram webhook
+  answers 503 without its secret rather than accept forged updates. Plus an in-isolate per-IP token
+  bucket (best-effort; CGNAT makes per-IP counting coarse in India) and a Cloudflare dashboard
+  rate-limiting rule as the enforcement that actually holds.
+- **Time budget inside the phone's.** The app aborts the relay call at 10 s, so each adapter gets
+  3.5 s and the whole dispatch 8 s, and the SMS lane runs concurrently with the data lane — the
+  relay's own SMS fallback must always have time to run before the phone gives up.
 - **Never log payloads.** No `console.*` carries a body, phone number or chat id.
 - **Twilio stays in the codebase, disabled** until all three credentials exist; nothing is described
   as validated until it has delivered a real message to a second phone.
@@ -82,7 +97,10 @@ Specific choices inside the decision:
 - Operational work moves to the runbook (`relay/README.md`): KV namespace, secrets, webhook
   registration, the dashboard rule, the smoke test that constitutes validation.
 - Privacy posture is unchanged from ADR-003: the SOS payload remains the only outbound health data,
-  and now the Worker additionally holds `code → chat_id` for ten minutes during linking.
+  and now the Worker additionally holds `linkToken → chat_id` for ten minutes during linking.
+- A deployment must set `TELEGRAM_WEBHOOK_SECRET` (and `RELAY_APP_KEY` before any paid channel) or
+  the affected routes answer 503; `/health` reports both so a misconfiguration is visible before
+  the first alert.
 
 ## Alternatives rejected
 

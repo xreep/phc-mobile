@@ -55,8 +55,8 @@ export interface SosResponse {
 }
 
 export interface LinkRequest {
-  /** Six digits, as shown by the bot. */
-  readonly code: string;
+  /** The app-generated deep-link token (128-bit, base64url, 22 chars). */
+  readonly linkToken: string;
 }
 
 export type Validation<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
@@ -66,7 +66,10 @@ export type Validation<T> = { readonly ok: true; readonly value: T } | { readonl
 export const E164 = /^\+[1-9]\d{7,14}$/;
 // Telegram chat ids are 64-bit integers; groups/channels are negative.
 const TELEGRAM_CHAT_ID = /^-?\d{1,20}$/;
-const LINK_CODE = /^\d{6}$/;
+/** 128 bits of base64url without padding — the app-generated Telegram link token (link.ts). */
+export const LINK_TOKEN = /^[A-Za-z0-9_-]{22}$/;
+/** Largest request body accepted on any POST route; a real SOS is well under 1 KiB. */
+export const MAX_BODY_BYTES = 16_384;
 /** Telegram's per-message ceiling; SMS bodies are far shorter. */
 export const MAX_MESSAGE_LENGTH = 4096;
 const MAX_PUSH_TOKEN_LENGTH = 4096;
@@ -162,10 +165,10 @@ export function validateSosRequest(body: unknown): Validation<SosRequest> {
 /** Validate a parsed JSON body for `POST /link`. */
 export function validateLinkRequest(body: unknown): Validation<LinkRequest> {
   if (!isRecord(body)) return { ok: false, error: 'body must be a JSON object' };
-  const code = body['code'];
-  const normalized = typeof code === 'string' ? code.trim() : typeof code === 'number' ? String(code) : '';
-  if (!LINK_CODE.test(normalized)) return { ok: false, error: 'code must be six digits' };
-  return { ok: true, value: { code: normalized } };
+  const raw = body['linkToken'];
+  const linkToken = typeof raw === 'string' ? raw.trim() : '';
+  if (!LINK_TOKEN.test(linkToken)) return { ok: false, error: 'linkToken must be 22 base64url characters' };
+  return { ok: true, value: { linkToken } };
 }
 
 /** Parse `CHANNEL_ORDER` ("telegram, textbelt") into known names, order kept, duplicates dropped. */

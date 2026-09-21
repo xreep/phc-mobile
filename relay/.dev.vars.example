@@ -4,11 +4,13 @@
 # Leave a line empty to leave that adapter unconfigured.
 
 TELEGRAM_BOT_TOKEN=
+# Mandatory for the webhook (503 without it); pass the same value to setWebhook as secret_token.
 TELEGRAM_WEBHOOK_SECRET=
 # Unset = "textbelt" (free tier, one SMS per day).
 TEXTBELT_KEY=
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
 TWILIO_FROM=
-# Optional shared key the app sends as X-PHC-Key. Not a real secret (it ships in the app bundle).
+# Shared key the app sends as X-PHC-Key. Optional for Telegram + free Textbelt; mandatory before
+# TEXTBELT_KEY or TWILIO_* (the relay answers 503 otherwise). Ships in the app bundle, so not a real secret.
 RELAY_APP_KEY=

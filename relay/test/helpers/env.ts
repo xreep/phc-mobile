@@ -32,5 +32,8 @@ export function fullEnv(overrides: Partial<Env> = {}, kv?: FakeKV): Env {
 }
 
 export const PHONE = '+919876543210';
+/** 22 base64url chars = 128 bits. Fixed fixtures, not real tokens. */
+export const LINK_TOKEN_A = 'AbCdEfGhIjKlMnOpQrStUv';
+export const LINK_TOKEN_B = 'Zy_x-WvUtSrQpOnMlKjIhG';
 export const CHAT_ID = '123456789';
 export const MESSAGE = 'PHC EMERGENCY - Asha needs help. Possible fall detected. Location: https://maps.google.com/?q=12.97,77.59';
