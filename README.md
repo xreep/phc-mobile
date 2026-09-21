@@ -23,9 +23,10 @@ contacts with the user's vitals and location, entirely without a backend holding
 ## Architecture
 
 See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the full data-flow diagram.
-In short: Health Connect and the accelerometer feed adapters into one `SensorReading` schema →
-a ring buffer → the pure rule engine (fused with an environment snapshot) → the Dashboard and, on a
-critical rule, the SOS state machine → Twilio relay or native SMS composer.
+In short: Health Connect and the accelerometer feed adapters into one `SensorReading` schema → a
+persisted `expo-sqlite` reading store → the pure rule engine (fused with an environment snapshot) →
+the Dashboard/Trends and, on a critical rule, the SOS state machine → the multi-channel emergency
+relay (Telegram/SMS) or native SMS composer fallback.
 
 ## Major features and validation status
 
@@ -38,14 +39,17 @@ Real-world validated / Mock-demo / Planned**. Full detail in
 | Rule-based risk engine (heat, respiratory, cardiovascular, fall, dehydration, fatigue) | Built · Unit tested |
 | Environment context (weather + AQI, offline cache) | Built · Unit/integration tested · live weather seen on the August APK |
 | Health Connect ingestion (HR, SpO₂, skin temp) + accelerometer fold | Built · Unit tested against mocked native modules — **not device validated** |
-| Emergency SOS (Twilio relay + SMS composer fallback) | Built · Unit/integration tested — relay not deployed, **not device validated** |
+| Local reading store (`expo-sqlite`, 7-day retention, erase control) | Built · Unit/integration tested — **not device validated** (new EAS build in progress) |
+| Trends screen (real 24h/7d history from the store) | Built · Unit/integration tested — **not device validated** |
+| Emergency relay (Cloudflare Worker: Telegram, Textbelt, Twilio) | Built · Unit tested (vitest, 142) · **Telegram lane device validated** (2026-09-21); Textbelt blocked for India; Twilio disabled |
+| Emergency SOS (app-side relay dispatch + Telegram linking, SMS composer fallback) | Built · Unit/integration tested — relay dispatch **not device validated**; composer fallback device validated |
 | Settings (contacts, sharing prefs, sensor source) | Built · Unit tested · plaintext AsyncStorage (not encrypted) |
-| Trends screen | Mock-demo — renders static constants, no persisted history yet |
 | Community ward summary | Mock-demo — real aggregation logic, hardcoded demo cohort |
-| Reading persistence, notifications, background sensing | Planned |
+| Background sensing | Planned |
 
-**Nothing in this repository is device- or real-world-validated except UI rendering and live
-OpenWeatherMap weather, observed on an August development build against a simulated vitals window.**
+**Nothing in this repository is device- or real-world-validated except UI rendering, live
+OpenWeatherMap weather (August development build, simulated vitals window), the first Health
+Connect/SOS-composer run, and the deployed relay's Telegram lane (validated by hand, 2026-09-21).**
 
 ## AI approach
 
@@ -88,9 +92,18 @@ npm ci
 Create `.env.local` (gitignored):
 ```
 EXPO_PUBLIC_OPENWEATHER_API_KEY=your_key_here
-# optional — leave unset to use the native SMS composer fallback for SOS
-EXPO_PUBLIC_TWILIO_SOS_URL=https://your-relay/sos
+# optional — leave unset to use the native SMS composer fallback for SOS. Must end in /sos
+# (a bare origin is treated as not configured). The old EXPO_PUBLIC_TWILIO_SOS_URL name is
+# still read for one release when it points at the same Worker.
+EXPO_PUBLIC_SOS_RELAY_URL=https://<worker>/sos
+# optional — sent as the X-PHC-Key header when the deployment requires it
+EXPO_PUBLIC_SOS_RELAY_KEY=
 ```
+
+The SOS relay itself (`relay/`) is a Cloudflare Worker deployed at
+`https://phc-sos-relay.xreep.workers.dev`, delivering over Telegram (device validated), Textbelt
+SMS (blocked for India on the free tier), or Twilio SMS (kept, disabled). See
+[`docs/features/sos-relay.md`](docs/features/sos-relay.md) for the full contract and status.
 
 Build and run a development client:
 ```bash
@@ -101,13 +114,16 @@ eas build --profile development --platform android
 ## Testing
 
 ```bash
-npm test                          # 48 suites / 1084 tests
+npm test                          # 63 suites / 1457 tests
 npx tsc --noEmit                  # typecheck
 npx eslint src --max-warnings 0   # lint
+
+cd relay && npm test              # 142 tests (vitest); also npm run typecheck / npm run check
 ```
 
-All 1084 tests are unit/integration tests against mocked native modules (Jest + React Native
-Testing Library). See [`docs/testing/validation-levels.md`](docs/testing/validation-levels.md) for
+All app tests are unit/integration tests against mocked native modules (Jest + React Native
+Testing Library); the relay's tests are vitest against a stubbed `fetch`. See
+[`docs/testing/validation-levels.md`](docs/testing/validation-levels.md) for
 what each level of testing does and does not cover, and
 [`docs/validation/device-validation-plan.md`](docs/validation/device-validation-plan.md) for the
 protocol to reach device validation.
@@ -116,16 +132,19 @@ protocol to reach device validation.
 
 **Current capability:** a simulated vitals window (default, clearly labelled "Simulated data") scored
 by the real rule engine; live weather/AQI for the phone's city; a dev-only "Simulate a fall" control
-that drives the real fall detector on real motion data; an SOS countdown → cancel, or an SMS composer
-opens pre-filled (no relay deployed). Trends and Community screens are static/demo data. See
+that drives the real fall detector on real motion data; Trends reads real history from the on-device
+store when one exists; an SOS countdown → cancel, an emergency-relay POST (Telegram/SMS, not yet
+exercised from the app on a device), or an SMS composer opens pre-filled. Community is static/demo
+data. See
 [`docs/JUDGE_QA.md`](docs/JUDGE_QA.md) for the honest answer to "what's actually working" and every
 other likely judge question.
 
 ## Limitations
 
-No reading persistence, no notifications, no background sensing (the app detects nothing with the
-screen off), Health Connect ingestion has never run against a real device, the SOS relay is
-undeployed, and settings are stored unencrypted. Full list:
+No background sensing (the app detects nothing with the screen off); the reading store, Trends, and
+the app's own emergency-relay dispatch are merged but not yet device validated (new EAS build in
+progress); Textbelt free SMS is blocked for India and Twilio stays disabled (KYC + paid top-up);
+settings are stored unencrypted. Full list:
 [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) → Known Risks.
 
 ## Roadmap

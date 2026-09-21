@@ -8,8 +8,8 @@ concrete steps inside those phases so each has a single, trackable name.
 
 | Stage | State |
 | --- | --- |
-| **NOW** | Decision layer (rule engine, environment fusion, SOS logic) built and unit/integration tested. Sensing layer built but never run on a phone. No persistence, no notifications, no background operation. |
-| **NEXT** | Device-validated sensing, AQI wired into risk, notifications, persisted readings, deployed SMS relay — an honest end-to-end demo on real hardware. |
+| **NOW** | Decision layer (rule engine, environment fusion, SOS logic) built and unit/integration tested. Sensing layer, persisted readings, real Trends, and the multi-channel relay's app-side dispatch are built and merged but await device validation (a new EAS build is in progress); the relay's Telegram lane itself is already device validated. No background operation. |
+| **NEXT** | Device validation of the store/Trends/app-side SOS dispatch once the new EAS build lands, plus background operation — an honest end-to-end demo on real hardware. |
 | **SIH-READY** | Background sensing, user profile/personalisation, 7-day baselines, an honest Tier-2 anomaly score, Hindi UI, real Trends. |
 | **PILOT-READY** | Encrypted storage, onboarding that survives permission denial, battery budget measured, Play Store health-permission approval, a written validation note per threshold. |
 | **PRODUCTION** | Installable app a real family or ASHA cluster could run for a pilot. |
@@ -42,14 +42,43 @@ a pending product decision — see `docs/PROJECT_STATUS.md` "Decisions awaiting 
 **Status: implemented, awaiting device validation.** Merged to master in PR #8 (reviewed) — see `docs/features/notifications.md`. Foreground-only today; the "verified
 on a locked phone" gate is unmet (no device validation yet).
 
-### M5 — Twilio relay deployed
-End-to-end SMS test. Gate: SMS with vitals + maps link received on a second phone; airplane-mode composer fallback recorded.
+### M5 — Multi-channel emergency relay deployed
+End-to-end alert test. Gate: an alert with vitals + maps link received on a second phone; airplane-mode composer fallback recorded.
+
+**Status: part 1a (relay) done, deployed, Telegram lane device validated; part 1b (app dispatch +
+linking) done, not device validated; part 2 (FCM caregiver role) pending.** Twilio required KYC and
+a paid top-up for India-based accounts, so the plan changed from a Twilio-only relay
+([ADR-003](decisions/ADR-003-sos-relay.md)) to a provider-agnostic one
+([ADR-007](decisions/ADR-007-multi-channel-relay.md), design approved 2026-09-20, PR #15). **1a:**
+the relay (`relay/`) is deployed at `https://phc-sos-relay.xreep.workers.dev` (PRs #18/#20); its
+Telegram lane was device validated by hand on 2026-09-21 (`/start <linkToken>` → `/link` → `/sos`
+delivered to a real Telegram account in ~1 s). Textbelt SMS is confirmed blocked for India on the
+free tier (502, composer fallback as designed); Twilio's code is kept, disabled. **1b:** the app
+speaks the relay's structured contract, links a caregiver's Telegram from Settings, and reports per
+contact/channel (`src/sos/relay.ts`, PR #22) — built and Jest-tested, **not yet device validated**;
+the on-phone test (a dev build with `EXPO_PUBLIC_SOS_RELAY_URL` set, one contact linked, one SOS
+reaching a second phone on Telegram) is next, pending a new EAS build. **2 (FCM + caregiver role):
+planned**, not started — the relay's `fcm` adapter is a stub. See
+[`docs/features/sos-relay.md`](features/sos-relay.md).
 
 ### M6 — Reading store (`expo-sqlite`)
 Readings persist across restarts; the hook reads from the store. Gate: existing engine tests stay green pointed at the store; a round-trip test survives an app restart.
 
+**Status: implemented, awaiting device validation.** Merged in PR #17 — `src/store/` gives the feed
+a persistent, 7-day `expo-sqlite` store with an "Erase my health data" control; the memory backend
+plus fake-driver contract tests are green. See [`docs/features/reading-store.md`](features/reading-store.md)
+and [`ADR-006`](decisions/ADR-006-local-reading-store.md). Device validation is pending a new EAS
+build (the config plugin `expo-sqlite` added in this PR has not yet been run on a phone).
+
 ### M7 — Real Trends
 Trends screen reads 24 h / 7 d history from the store; the `TRENDS` constant is deleted. Gate: empty-state when no history exists; values match hand-computed aggregates on a seeded DB.
+
+**Status: implemented, awaiting device validation.** Merged in PR #19 — `src/trends/aggregate.ts` +
+`src/hooks/use-trends.ts` replace the `TRENDS` constant with real `store.readSince` aggregates — see
+`docs/features/trends.md`. Both gates are met by tests: an empty state renders when no history
+exists (simulated source and empty-store cases, `trends-screen.test.tsx`), and rendered values match
+hand-computed aggregates on a seeded store (133/61/200/131 bpm — current/min/max/avg — in the same
+suite). No device run yet.
 
 ### M8 — Background sensing
 Android foreground service runs polling + accelerometer fold with the screen off. Gate: phone in pocket, screen off 30 min → buffer full on resume; a mattress drop triggers the fall rule.

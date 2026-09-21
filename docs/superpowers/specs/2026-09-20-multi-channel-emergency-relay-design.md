@@ -1,6 +1,6 @@
 # Multi-channel emergency relay — design (M5, for approval)
 
-**Date:** 2026-09-20 · **Status:** DRAFT — awaiting approval (Gate 2 architecture, Gate 5 secrets/privacy)
+**Date:** 2026-09-20 · **Status:** Approved 2026-09-20; implemented PRs #18/#20/#22
 **PS:** §6 emergency assistance (SOS to caregivers, location-enabled) · **Replaces:** the Twilio-only relay plan in `docs/features/sos-relay.md` (blocked on Twilio KYC + paid top-up)
 
 ## Problem

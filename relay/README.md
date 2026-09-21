@@ -251,8 +251,9 @@ curl -sS -i "$RELAY/sos" -H 'Content-Type: application/json' -H 'X-PHC-Key: …'
 A `200` with `"delivered":true` **and** the message visible on the second phone is the validation
 event — record it in `docs/PROJECT_STATUS.md` and flip the row in the status table above.
 
-Then point the app at it: `EXPO_PUBLIC_SOS_RELAY_URL=https://<WORKER_URL>/sos` in `.env.local`
-(the current build reads `EXPO_PUBLIC_TWILIO_SOS_URL`; the rename lands with M5 part 1b).
+Then point the app at it: `EXPO_PUBLIC_SOS_RELAY_URL=https://<WORKER_URL>/sos` in `.env.local` (the
+legacy `EXPO_PUBLIC_TWILIO_SOS_URL` name is still read for one release when it points at this
+Worker — the rename landed with M5 part 1b, PR #22).
 
 ### Local development
 
