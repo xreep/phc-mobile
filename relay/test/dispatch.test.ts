@@ -131,7 +131,9 @@ describe('dispatch', () => {
     expect(response.delivered).toBe(true);
     // Textbelt started while Telegram was still in flight — well inside the 150 ms stall.
     expect(started['textbelt']).toBeLessThan(100);
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
+    // Lower bound with tolerance: setTimeout can fire ~1 ms early relative to Date.now()
+    // granularity (CI saw 149 for a 150 ms sleep). The upper bound is what the deadline tests pin.
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(140);
   });
 
   it('a hanging Telegram (real adapter, stubbed fetch) does not stop Textbelt within the deadline', async () => {
