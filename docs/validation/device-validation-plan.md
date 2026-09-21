@@ -93,7 +93,7 @@ Enable airplane mode on the test phone, then trigger a critical event. Confirm:
 | 3. Compatibility — Android 14 | | | | |
 | 3. Compatibility — Android 15 | Android 15 | 2026-09-20 | ✅ PASS | Permission sheet listed **Heart rate, Blood oxygen, Skin temperature**; all granted; `getSdkStatus`/`initialize`/`getGrantedPermissions`/`readVitals` ran without error. Sideloaded dev client visible to Health Connect. |
 | 3. Compatibility — permission denied (partial grant) | | | | |
-| 4. SOS — relay deployed | | | | |
+| 4. SOS — relay deployed | Cloudflare Worker + Android 15 phone (Telegram) | 2026-09-21 | 🟡 PARTIAL | Relay live; Telegram link + delivery validated end to end by hand (`curl`). **App-side dispatch through the relay not yet built** (M5 part 1b) — the phone still uses the SMS composer. Textbelt: free SMS blocked for India (502 → composer fallback behaves correctly). |
 | 4. SOS — composer fallback | | | | |
 | 5. Airplane mode — engine | | | | |
 | 5. Airplane mode — SOS fallback | | | | |

@@ -21,10 +21,10 @@ SMS_ALWAYS = "true"
 RATE_LIMIT_PER_MINUTE = "10"
 # The bot's public username from @BotFather, without the "@". `/health` exposes it so the app can
 # build the caregiver's deep link `https://t.me/<BOT_USERNAME>?start=<linkToken>`.
-BOT_USERNAME = ""
+BOT_USERNAME = "phc_sos_bot"
 
 # Telegram link tokens (app-generated, 128-bit, 10-minute TTL, one-time) — see src/link.ts.
 # Create with `npx wrangler kv namespace create LINKS` and paste the printed id here.
 [[kv_namespaces]]
 binding = "LINKS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "c068a039b8f64a85a9b0b1b9e55573bd"
