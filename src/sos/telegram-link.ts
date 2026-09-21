@@ -22,8 +22,10 @@
  * ## Why the poll is every 10 s
  * The relay's per-IP token bucket is 10 requests a minute, shared between `/link` and `/sos`
  * (`relay/src/index.ts`). Six polls a minute leaves four for an SOS that fires while a link is
- * pending; every 5 s would leave none and the emergency call would answer 429. Ten minutes is
- * the relay's KV TTL (`LINK_TTL_SECONDS`): polling past it can only ever see 404.
+ * pending; every 5 s would leave none and the emergency call would answer 429. A 429 on the poll
+ * itself skips one cycle (20 s before the next), so a bucket that is already empty gets a full
+ * minute-window's worth of refill rather than being drained again at once. Ten minutes is the
+ * relay's KV TTL (`LINK_TTL_SECONDS`): polling past it can only ever see 404.
  *
  * Nothing about the PHC user crosses this flow — no phone number, no name, no health data. The
  * relay learns a chat id Telegram already knows; the app learns the same chat id. Nothing here
@@ -132,8 +134,12 @@ export type BotUsernameResult =
 export type RedeemResult =
   /** The caregiver has not tapped yet (404). Keep polling. */
   | { readonly status: 'pending' }
-  /** A transient failure (429, 5xx, network). The token is still good; keep polling. */
-  | { readonly status: 'retry' }
+  /**
+   * A transient failure (429, 5xx, network). The token is still good; keep polling. `rateLimited`
+   * marks the 429: the poll shares the relay's per-IP bucket with `/sos`, so the next cycle is
+   * skipped rather than spent proving the bucket is still empty.
+   */
+  | { readonly status: 'retry'; readonly rateLimited?: true }
   | { readonly status: 'linked'; readonly telegramChatId: string }
   /** Will not change by waiting (no relay, 401, 400, unusable chat id). */
   | { readonly status: 'failed'; readonly error: string };
@@ -229,7 +235,8 @@ export async function redeemLinkToken(
 
   const { status } = fetched.response;
   if (status === 404) return { status: 'pending' };
-  if (status === 429 || status >= 500) return { status: 'retry' };
+  if (status === 429) return { status: 'retry', rateLimited: true };
+  if (status >= 500) return { status: 'retry' };
   if (!fetched.response.ok) return { status: 'failed', error: describeRelayStatus(status) };
 
   const body = await readJson(fetched.response);

@@ -26,7 +26,8 @@ disabled for this country" and the relay returned 502 as designed.**
 **App (M5 part 1b): Built · Unit/Integration tested (Jest) · Device validated: NO.** The app now
 sends the structured body, carries a per-contact `telegramChatId`, links a caregiver's Telegram from
 Settings, and reports per contact and per channel. The legacy body is still accepted by the relay,
-so an older build pointed at the Worker keeps working. The caregiver push role (FCM) is **M5 part
+so an older build pointed at the Worker keeps working; the legacy *variable name* keeps working too
+when it points at the Worker (see the env var rename below). The caregiver push role (FCM) is **M5 part
 2**.
 
 No adapter is described as validated until it has delivered a real message to a second phone; the
@@ -137,7 +138,16 @@ old `twilioSent: string[]`); `nativeSmsPending` and `failed` are unchanged. `Sos
 **Environment variable rename:** `EXPO_PUBLIC_SOS_RELAY_URL` (the `/sos` endpoint;
 `/health` and `/link` are resolved as its siblings) replaces `EXPO_PUBLIC_TWILIO_SOS_URL`. The old
 name is still read when the new one is unset or unusable, for one release, and nothing logs which
-one was used. `EXPO_PUBLIC_SOS_RELAY_KEY` is optional and becomes the `X-PHC-Key` header on `/sos`
+one was used — it keeps working **when it points at the Worker**: the new client requires
+`delivered: true` in the body, which the old Twilio Function never sent, so a legacy URL that still
+names that function now falls back to the composer on every SOS rather than reporting it sent.
+
+**The URL must end in `/sos`.** A value whose path does not (a bare origin, `/health`, a typo) is
+treated as *not configured* — `src/sos/config.ts` `isUsableEndpoint`, pinned in `config.test.ts`.
+The reason is the failure it prevents: with a bare origin `/health` and `/link` resolve as its
+siblings, so the Telegram link flow works, Settings says "configured", and every SOS POSTs to `/`
+→ 404 → composer for a user who believed the relay was on. A trailing slash (`…/sos/`) and a
+prefix (`…/v1/sos`) are accepted; the Worker strips trailing slashes before routing. `EXPO_PUBLIC_SOS_RELAY_KEY` is optional and becomes the `X-PHC-Key` header on `/sos`
 and `/link` when set. `.env.local` is gitignored; the README's example line still names the old
 variable (controller-owned, see the tail of this doc).
 
@@ -214,8 +224,10 @@ In Settings → a contact's editor → **Telegram alerts** → **Link Telegram**
    (`src/hooks/use-telegram-link.ts`). 10 s because the relay's per-IP token bucket is 10 requests a
    minute *shared with `/sos`*: six polls a minute leaves four for an SOS that fires while a link is
    pending, where every 5 s would leave none. 10 min because that is the relay's KV TTL — polling
-   past it can only ever see 404. `404` → keep waiting; `429` / `5xx` / network → keep waiting (the
-   token is still good); `401` / `400` → stop with the reason; `{ telegramChatId }` → "Linked ✓".
+   past it can only ever see 404. `404` → keep waiting; `5xx` / network → keep waiting (the token is
+   still good); `429` → keep waiting but **skip one cycle** (20 s before the next poll) so the
+   shared bucket refills instead of being drained again; `401` / `400` → stop with the reason;
+   `{ telegramChatId }` → "Linked ✓".
 5. The chat id lands in the editor's draft and is stored on **Save contact** (validate-on-read in
    `src/settings/store.ts`: digits with an optional leading `-`, up to 20; a malformed value drops
    the field and keeps the contact). Cancel discards it like any other unsaved edit, and the copy
@@ -324,7 +336,15 @@ linked from Settings on the phone, one SOS reaching a second phone on Telegram.
   so a user who leaves the editor to send the link in another app resumes polling on return (the
   10-minute window is wall time, so an expired token is reported as such rather than polled).
 - A linked chat id is a draft until **Save contact**; a user who links and then cancels has consumed
-  a token for nothing and must link again. The copy says so.
+  a token for nothing and must link again. The copy says so ("Save the contact to keep it" is shown
+  only while the draft differs from what is stored).
+- **The caregiver can be told "linked" when the app is not.** The bot replies "Linked to PHC. You
+  will receive emergency alerts here." the moment the tap lands — before the app has polled, and
+  regardless of what the app then does with the chat id. If the user cancels the editor, closes the
+  sheet or leaves Settings before Save (unmount stops the poll; a chat id that arrives afterwards is
+  dropped), the caregiver believes they are linked and the app has nothing. The contact must be
+  linked again with a fresh link; the old token is consumed on the relay. The bot's reply cannot be
+  made conditional on the app's save without a second round trip, which is M5 part 2 material.
 - `X-PHC-Key` ships in the bundle like any `EXPO_PUBLIC_*` value; the deployed relay currently has
   no app key set (`/health` reports `appKeySet: false`), which is fine while only free channels are
   on.

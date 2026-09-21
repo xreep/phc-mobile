@@ -383,6 +383,9 @@ describe('telegram linking', () => {
 
     await fireEvent.press(screen.getByText('Meera'));
     expect(screen.getByText(/^Linked ✓/)).toBeTruthy();
+    // A link stored in an earlier session is already saved; telling the user to save it would
+    // be false, and is the sentence reserved for a link that is still a draft.
+    expect(screen.queryByText(/Save the contact to keep it/)).toBeNull();
     await fireEvent.press(screen.getByText('Unlink Telegram'));
     expect(screen.getByText('Link Telegram')).toBeTruthy();
     await fireEvent.press(screen.getByText('Save contact'));

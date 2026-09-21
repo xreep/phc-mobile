@@ -178,6 +178,7 @@ export function ContactEditor({
             </ThemedText>
             <TelegramLinkSection
               linked={telegramChatId !== undefined}
+              unsaved={telegramChatId !== contact?.telegramChatId}
               relayConfigured={relayConfigured}
               link={link}
               onUnlink={() => {
@@ -246,18 +247,22 @@ export function ContactEditor({
 /**
  * The Telegram row: linked / not linked / the link in progress.
  *
- * Every state names its next action. "Linked" says the save is still needed because it is —
+ * Every state names its next action. "Linked" says the save is still needed only when it is —
  * a user who links and then cancels would otherwise believe the contact receives Telegram
- * alerts when the store never heard about it.
+ * alerts when the store never heard about it; a user opening a contact linked last week must
+ * not be told to save something that is already saved.
  */
 function TelegramLinkSection({
   linked,
+  unsaved,
   relayConfigured,
   link,
   onUnlink,
   onShare,
 }: {
   linked: boolean;
+  /** The draft chat id differs from the stored one — the link is not persisted until Save. */
+  unsaved: boolean;
   relayConfigured: boolean;
   link: ReturnType<typeof useTelegramLink>;
   onUnlink: () => void;
@@ -270,7 +275,9 @@ function TelegramLinkSection({
     return (
       <>
         <ThemedText type="small" style={{ color: risk.green.fg }}>
-          Linked ✓ — alerts also go to this contact on Telegram. Save the contact to keep it.
+          {unsaved
+            ? 'Linked ✓ — alerts also go to this contact on Telegram. Save the contact to keep it.'
+            : 'Linked ✓ — alerts also go to this contact on Telegram.'}
         </ThemedText>
         <Pressable
           accessibilityRole="button"

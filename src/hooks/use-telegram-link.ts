@@ -136,8 +136,14 @@ export function useTelegramLink(options: UseTelegramLinkOptions = {}): TelegramL
           return;
         }
 
+        // A 429 means the shared per-IP bucket is empty; skipping a cycle lets it refill rather
+        // than draining it again at the next tick (see `sos/telegram-link.ts`).
+        const wait =
+          outcome.status === 'retry' && outcome.rateLimited === true
+            ? LINK_POLL_INTERVAL_MS * 2
+            : LINK_POLL_INTERVAL_MS;
         await new Promise<void>((resolve) => {
-          timerRef.current = setTimeout(resolve, LINK_POLL_INTERVAL_MS);
+          timerRef.current = setTimeout(resolve, wait);
         });
         timerRef.current = null;
         if (!live()) return;

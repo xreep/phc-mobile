@@ -88,6 +88,22 @@ describe('resolveRelayEndpoint', () => {
     expect(withEndpoint('phc-1234.twil.io/sos')).toBeNull(); // no scheme
   });
 
+  it('requires the /sos route, so a bare origin reads as unconfigured', () => {
+    // The dangerous half-configuration: with a bare origin `/health` and `/link` resolve as its
+    // siblings and the Telegram link flow works, Settings says "configured", and every SOS POSTs
+    // to `/` → 404 → composer. Better that Settings says "not configured" than lies.
+    expect(withEndpoint('https://phc-sos-relay.example.workers.dev')).toBeNull();
+    expect(withEndpoint('https://phc-sos-relay.example.workers.dev/')).toBeNull();
+    expect(withEndpoint('https://phc-sos-relay.example.workers.dev/health')).toBeNull();
+    expect(withEndpoint('https://phc-sos-relay.example.workers.dev/sos-old')).toBeNull();
+  });
+
+  it('accepts /sos under a prefix, and with a trailing slash', () => {
+    // The Worker strips trailing slashes from the path before routing.
+    expect(withEndpoint('https://relay.example/v1/sos')).toBe('https://relay.example/v1/sos');
+    expect(withEndpoint('https://relay.example/sos/')).toBe('https://relay.example/sos/');
+  });
+
   it('rejects the placeholder shapes a half-configured env file holds', () => {
     // Both spellings of "I copied the template and never filled it in".
     expect(withEndpoint('[YOUR_TWILIO_FUNCTION_URL]')).toBeNull();
@@ -185,6 +201,10 @@ describe('isRelayConfigured', () => {
     expect(isRelayConfigured()).toBe(true);
 
     setEnv(NEW_NAME, '[YOUR_TWILIO_FUNCTION_URL]');
+    expect(isRelayConfigured()).toBe(false);
+
+    // The bare-origin case is exactly the one Settings must not call "configured".
+    setEnv(NEW_NAME, 'https://phc-1234.twil.io');
     expect(isRelayConfigured()).toBe(false);
   });
 });

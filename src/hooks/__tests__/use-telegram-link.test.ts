@@ -199,8 +199,9 @@ describe('polling', () => {
   });
 
   it('keeps waiting through a transient failure', async () => {
-    // A 429 from the shared bucket or a dropped connection does not invalidate the token.
-    const { fetchImpl } = relay([reply(429, null), reply(500, null), reply(200, { telegramChatId: '42' })]);
+    // A 5xx or a dropped connection does not invalidate the token (the 429 case, which also
+    // backs off a cycle, is below).
+    const { fetchImpl } = relay([reply(500, null), reply(503, null), reply(200, { telegramChatId: '42' })]);
     const { result } = await renderHook(() => useTelegramLink({ endpoint: ENDPOINT, fetchImpl }));
 
     await act(async () => {
@@ -212,6 +213,29 @@ describe('polling', () => {
 
     await advance(LINK_POLL_INTERVAL_MS);
     expect(result.current.state).toEqual({ status: 'linked', telegramChatId: '42' });
+  });
+
+  it('skips one cycle after a 429, then resumes the normal cadence', async () => {
+    // The poll shares the relay's per-IP bucket with `/sos`. Polling again 10 s after a 429
+    // spends the refill an emergency would need; waiting a cycle costs the caregiver ten seconds.
+    const { fetchImpl, linkCalls } = relay([reply(429, null), reply(404, { error: 'not yet' })]);
+    const { result } = await renderHook(() => useTelegramLink({ endpoint: ENDPOINT, fetchImpl }));
+
+    await act(async () => {
+      result.current.start();
+    });
+    await settle();
+    expect(linkCalls()).toBe(1); // the immediate poll: 429
+
+    await advance(LINK_POLL_INTERVAL_MS);
+    expect(linkCalls()).toBe(1); // the skipped cycle
+    expect(result.current.state).toMatchObject({ status: 'waiting' });
+
+    await advance(LINK_POLL_INTERVAL_MS);
+    expect(linkCalls()).toBe(2); // resumed
+
+    await advance(LINK_POLL_INTERVAL_MS);
+    expect(linkCalls()).toBe(3); // and back to every 10 s
   });
 
   it('stops with the reason on an answer that will not change', async () => {

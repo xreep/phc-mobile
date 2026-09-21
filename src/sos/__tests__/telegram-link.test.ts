@@ -227,12 +227,14 @@ describe('redeemLinkToken', () => {
 
   it('treats a transient failure as retryable rather than terminal', async () => {
     // A 429 from the shared bucket, a 5xx, or a dropped connection: the token is still valid
-    // for the rest of its ten minutes, so the poll should carry on.
-    for (const response of [reply(429, null), reply(500, null)]) {
-      await expect(
-        redeemLinkToken(TOKEN, { endpoint: ENDPOINT, fetchImpl: fetchMock(response) }),
-      ).resolves.toEqual({ status: 'retry' });
-    }
+    // for the rest of its ten minutes, so the poll should carry on. The 429 is marked so the
+    // hook can back off a cycle — that bucket is the one an SOS would need.
+    await expect(
+      redeemLinkToken(TOKEN, { endpoint: ENDPOINT, fetchImpl: fetchMock(reply(429, null)) }),
+    ).resolves.toEqual({ status: 'retry', rateLimited: true });
+    await expect(
+      redeemLinkToken(TOKEN, { endpoint: ENDPOINT, fetchImpl: fetchMock(reply(500, null)) }),
+    ).resolves.toEqual({ status: 'retry' });
     const failing = jest
       .fn<Promise<Response>, FetchArgs>()
       .mockRejectedValue(new TypeError('Network request failed'));

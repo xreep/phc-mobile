@@ -17,9 +17,10 @@
  * EXPO_PUBLIC_SOS_RELAY_KEY=<the same value>
  * ```
  *
- * The value is the **`/sos` endpoint**; `/health` (bot username for the Telegram linking flow)
- * and `/link` (token redemption) are resolved as its siblings by {@link resolveRelayRoute}, so
- * there is one variable rather than three that can disagree.
+ * The value is the **`/sos` endpoint** — a URL whose path does not end in `/sos` is treated as
+ * not configured, for the reason given on {@link isUsableEndpoint}. `/health` (bot username for
+ * the Telegram linking flow) and `/link` (token redemption) are resolved as its siblings by
+ * {@link resolveRelayRoute}, so there is one variable rather than three that can disagree.
  *
  * ## The rename
  * The variable used to be `EXPO_PUBLIC_TWILIO_SOS_URL`, from when the relay was a Twilio
@@ -86,11 +87,21 @@ export const REDISPATCH_COOLDOWN_MS = 5 * 60_000;
 /** The header the relay reads its optional shared app key from (`relay/src/index.ts`). */
 export const RELAY_APP_KEY_HEADER = 'X-PHC-Key';
 
-/** Rejects `http:` and anything malformed, so a typo cannot silently send an emergency
- *  payload in cleartext or to nowhere. */
+/**
+ * Rejects `http:`, anything malformed, and any path that is not the relay's `/sos` route.
+ *
+ * The scheme rule keeps an emergency payload out of cleartext. The path rule exists because a
+ * bare origin (`https://worker.example`) is the most natural mistake to make and the worst one to
+ * make silently: `/health` and `/link` would resolve fine as its siblings, so the Telegram link
+ * flow would *work*, Settings would say "configured", and every SOS would POST to `/` — a 404 and
+ * the composer, for a user who believed the relay was on. Requiring `…/sos` (a trailing slash is
+ * tolerated; the Worker strips it) makes the half-configured state visibly unconfigured instead.
+ */
 function isUsableEndpoint(value: string): boolean {
   try {
-    return new URL(value).protocol === 'https:';
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    return url.pathname.replace(/\/+$/, '').endsWith('/sos');
   } catch {
     return false;
   }
@@ -105,7 +116,8 @@ function isPlaceholder(value: string): boolean {
   return value.startsWith('[') || value.includes('YOUR_') || value.includes('<');
 }
 
-/** One environment variable, validated: null when unset, blank, a placeholder or unusable. */
+/** One environment variable, validated: null when unset, blank, a placeholder, not https, or
+ *  not the `/sos` route (see {@link isUsableEndpoint}). */
 function usableEndpointFrom(raw: string | undefined): string | null {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
