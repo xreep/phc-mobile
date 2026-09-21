@@ -83,9 +83,13 @@ Channel rules (`src/dispatch.ts`):
    inapplicable channels cost nothing.
 2. **Time budget.** The phone gives the whole call 10 s. Each adapter gets 3.5 s
    (`AbortSignal.timeout`) and the dispatch as a whole 8 s; an adapter that would start after the
-   deadline is reported as `deadline exceeded` instead of running.
+   deadline is reported as `deadline exceeded` instead of running, and one still running at the
+   deadline is abandoned with the same row — the relay never answers later than 8 s after it
+   started, even if a provider ignores the abort.
 3. With `SMS_ALWAYS=true` (the default) and a phone number on the contact, the SMS lane runs
    **concurrently** with the data lane (Telegram): a hung Telegram call cannot eat the SMS's time.
+   Both lanes start together, so the SMS may reach the caregiver before the Telegram message does
+   — plan order is a priority for reporting, not a sequence.
    Telegram reaching a phone does not mean the caregiver saw it; an SMS lights the lock screen. An
    emergency deserves both. Exactly one SMS adapter is attempted after a data success (Textbelt
    preferred, then Twilio — and if the request named only an unconfigured SMS adapter, the

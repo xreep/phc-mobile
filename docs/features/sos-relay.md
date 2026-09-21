@@ -110,9 +110,12 @@ the alert to "needs one tap" rather than losing it.
 Dispatch (`relay/src/dispatch.ts`): every planned channel gets one result row (sent, failed,
 `not configured`, `contact has no …`, `skipped: already delivered`, `deadline exceeded`).
 **Time budget:** the phone allows 10 s for the whole call, so each adapter gets 3.5 s and the
-dispatch 8 s in total; an adapter that would start after the deadline is reported, not run. With
-`SMS_ALWAYS=true` (default) and a phone number present, the SMS lane runs **concurrently** with the
-data lane so a hung Telegram call cannot starve the SMS; exactly one SMS adapter is attempted after
+dispatch 8 s in total; an adapter that would start after the deadline is reported, not run, and
+one still in flight at the deadline is abandoned with a `deadline exceeded` row — the relay never
+answers later than 8 s, even if a provider ignores its abort signal. With `SMS_ALWAYS=true`
+(default) and a phone number present, the SMS lane runs **concurrently** with the data lane so a
+hung Telegram call cannot starve the SMS — both lanes start together, so the SMS may land before
+the Telegram message (plan order is a reporting order, not a sequence); exactly one SMS adapter is attempted after
 a Telegram success (Textbelt preferred, then Twilio; a configured one is added when the request
 named only an unconfigured SMS adapter), and a second SMS adapter runs only while nothing has been
 delivered. Telegram reaching a phone does not mean the caregiver saw it; an SMS lights the lock
@@ -171,13 +174,15 @@ SOS payload is the only outbound health data, exactly as before. Link flow: Tele
 id) → KV (10 min) → app. Nothing is persisted by the Worker beyond link tokens.
 
 ## Tests
-`relay/test/*.test.ts` (vitest, 138 tests): validation incl. the legacy body and the link token
+`relay/test/*.test.ts` (vitest, 142 tests): validation incl. the legacy body and the link token
 shape; every adapter's happy path, HTTP error, non-JSON body, real timeout via
 `AbortSignal.timeout`, network error and not-configured/not-applicable guard; dispatch order,
 any-ok → 200, all-fail → 502, `SMS_ALWAYS` on/off, exactly-one-SMS, skipped rows, the
 unconfigured-SMS-in-plan case, concurrent lanes (a hanging Telegram does not stop Textbelt, wall
 time well under the deadline), per-adapter timeout capped by the remaining deadline, `deadline
-exceeded` rows; app-key 401, 503 fail-closed for paid channels without a key; rate limit 429; 413
+exceeded` rows for adapters not yet started and for adapters that ignore their abort signal
+(dispatch returns at the deadline; a hung data lane still yields `delivered: true` from the SMS
+lane); app-key 401, 503 fail-closed for paid channels without a key; rate limit 429; 413
 body cap; link store/redeem/expiry/one-time; webhook 503 without secret, 401 on mismatch,
 `/start <token>`, help for malformed payloads, ignored updates; the router end to end with the
 real adapters over a stubbed `fetch`; and an assertion that no handler path logs the message,
@@ -278,5 +283,5 @@ tested against a mocked network; it is not deployed yet, so today every SOS take
 ### `docs/BUILD_MATRIX.md` row(s)
 | Feature | Built | Unit tested | Integration tested | Device validated | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Emergency relay (Worker) | ✅ | ✅ (vitest, 138) | ✅ (router + real adapters over stubbed fetch) | ❌ | Not deployed; no adapter has sent a real message |
+| Emergency relay (Worker) | ✅ | ✅ (vitest, 142) | ✅ (router + real adapters over stubbed fetch) | ❌ | Not deployed; no adapter has sent a real message |
 | Telegram linking | ✅ | ✅ | ✅ | ❌ | App UI is M5 part 1b |

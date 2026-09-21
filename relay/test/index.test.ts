@@ -196,9 +196,15 @@ describe('POST /sos', () => {
     const handler = createHandler();
     const declared = await handler(post('/sos', { to: PHONE, message: MESSAGE }, { 'Content-Length': String(MAX_BODY_BYTES + 1) }), paidEnv());
     expect(declared.status).toBe(413);
-    // Undeclared length (chunked): the cap is enforced on the bytes actually read.
-    const oversized = await handler(post('/sos', { to: PHONE, message: 'x'.repeat(MAX_BODY_BYTES + 100) }), paidEnv());
+    // Undeclared length (chunked): the cap is enforced on the bytes actually read — bytes, not
+    // characters, so a multibyte body that is under the cap in UTF-16 units is still refused.
+    const oversized = await handler(post('/sos', { to: PHONE, message: 'x'.repeat(MAX_BODY_BYTES + 100) }, { 'Content-Length': null }), paidEnv());
     expect(oversized.status).toBe(413);
+    const multibyte = '€'.repeat(6_000); // 6 000 chars, 18 000 bytes
+    expect(multibyte.length).toBeLessThan(MAX_BODY_BYTES);
+    expect(new TextEncoder().encode(multibyte).length).toBeGreaterThan(MAX_BODY_BYTES);
+    const wide = await handler(post('/sos', { to: PHONE, message: multibyte }, { 'Content-Length': null }), paidEnv());
+    expect(wide.status).toBe(413);
     expect(stub.mock).not.toHaveBeenCalled();
   });
 

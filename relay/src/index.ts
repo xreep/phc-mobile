@@ -68,7 +68,7 @@ async function parseJsonBody(request: Request): Promise<ParsedBody> {
   }
   try {
     const text = await request.text();
-    if (text.length > MAX_BODY_BYTES) {
+    if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) {
       return { ok: false, response: json(413, { error: `body must be at most ${MAX_BODY_BYTES} bytes` }) };
     }
     return { ok: true, body: JSON.parse(text) as unknown };

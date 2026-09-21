@@ -322,6 +322,74 @@ describe('dispatch', () => {
       expect(adapters.textbelt.sent).toEqual([]);
     });
 
+    /** An adapter that ignores its abort signal and never settles — the worst upstream there is. */
+    const hang = (): Promise<never> => new Promise<never>(() => undefined);
+
+    it('abandons adapters that ignore their signal: rows say "deadline exceeded" and dispatch returns at the deadline', async () => {
+      const adapters = fakes({
+        telegram: { needs: 'telegramChatId', before: hang },
+        textbelt: { needs: 'phone', before: hang },
+      });
+      const t0 = Date.now();
+      const response = await dispatch(request(), adapters, makeEnv(), { deadlineMs: 150 });
+      const wall = Date.now() - t0;
+
+      expect(response).toEqual({
+        delivered: false,
+        results: [
+          { channel: 'telegram', ok: false, error: DEADLINE_ERROR },
+          { channel: 'textbelt', ok: false, error: DEADLINE_ERROR },
+        ],
+      });
+      expect(wall).toBeGreaterThanOrEqual(140);
+      expect(wall).toBeLessThan(DEADLINE_MS);
+      expect(wall).toBeLessThan(1_000);
+    });
+
+    it('a hung data lane does not hold up an SMS success: delivered within the deadline', async () => {
+      const adapters = fakes({ telegram: { needs: 'telegramChatId', before: hang } });
+      const t0 = Date.now();
+      const response = await dispatch(request(), adapters, makeEnv(), { deadlineMs: 150 });
+      const wall = Date.now() - t0;
+
+      expect(response).toEqual({
+        delivered: true,
+        results: [
+          { channel: 'telegram', ok: false, error: DEADLINE_ERROR },
+          { channel: 'textbelt', ok: true },
+        ],
+      });
+      expect(wall).toBeLessThan(DEADLINE_MS);
+      expect(wall).toBeLessThan(1_000);
+    });
+
+    it('sequential mode: a hung first adapter is abandoned and the next one gets a deadline row, not a wait', async () => {
+      const adapters = fakes({ telegram: { needs: 'telegramChatId', before: hang } });
+      const t0 = Date.now();
+      const response = await dispatch(request(), adapters, makeEnv({ SMS_ALWAYS: 'false' }), { deadlineMs: 150 });
+      expect(Date.now() - t0).toBeLessThan(1_000);
+      expect(response).toEqual({
+        delivered: false,
+        results: [
+          { channel: 'telegram', ok: false, error: DEADLINE_ERROR },
+          { channel: 'textbelt', ok: false, error: DEADLINE_ERROR },
+        ],
+      });
+      expect(adapters.textbelt.sent).toEqual([]);
+    });
+
+    it('a late result from an abandoned adapter cannot change the response', async () => {
+      let release: (() => void) | undefined;
+      const adapters = fakes({
+        telegram: { needs: 'telegramChatId', before: () => new Promise<void>((resolve) => { release = resolve; }) },
+      });
+      const response = await dispatch(request(), adapters, makeEnv(), { deadlineMs: 100 });
+      expect(response.results[0]).toEqual({ channel: 'telegram', ok: false, error: DEADLINE_ERROR });
+      release?.();
+      await sleep(10);
+      expect(response.results[0]).toEqual({ channel: 'telegram', ok: false, error: DEADLINE_ERROR });
+    });
+
     it('defaults: 3.5 s per adapter under an 8 s deadline, both under the phone\'s 10 s', async () => {
       const adapters = fakes();
       await dispatch(request(), adapters, makeEnv());

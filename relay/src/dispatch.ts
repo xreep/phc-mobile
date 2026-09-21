@@ -17,9 +17,11 @@
  * ## Time budget — the phone gives the whole call 10 s
  * Each adapter gets `DEFAULT_TIMEOUT_MS` (3.5 s) and the dispatch as a whole gets `DEADLINE_MS`
  * (8 s). An adapter that would start after the deadline gets a `deadline exceeded` row instead;
- * one that starts near it gets only the remaining time. The relay must always answer before the
- * phone's own timer fires, or the phone falls back to the composer without ever seeing that an
- * SMS went out.
+ * one that starts near it gets only the remaining time; and every in-flight `send()` is **raced
+ * against the deadline**, so an adapter that ignores its abort signal is abandoned with a
+ * `deadline exceeded` row rather than awaited. `dispatch()` never resolves later than
+ * `DEADLINE_MS` after it started. The relay must always answer before the phone's own timer
+ * fires, or the phone falls back to the composer without ever seeing that an SMS went out.
  *
  * ## Two lanes — "SMS always attempted if a phone number exists"
  * With `SMS_ALWAYS` and a phone number, the SMS lane runs **concurrently** with the data lane
@@ -65,6 +67,8 @@ const SMS_PREFERENCE: readonly ChannelName[] = ['textbelt', 'twilio'];
 
 export const SKIPPED_ERROR = 'skipped: already delivered';
 export const DEADLINE_ERROR = 'deadline exceeded';
+/** Sentinel the deadline promise resolves to; never a `SendResult`. */
+const DEADLINE = Symbol('deadline');
 
 function isSmsReady(adapter: Adapter, env: Env, to: Destination): boolean {
   return adapter.kind === 'sms' && adapter.configured(env) && adapter.applicable(to);
@@ -105,6 +109,13 @@ export async function dispatch(
   const results = new Map<ChannelName, ChannelResult>();
   const state = { delivered: false };
 
+  // One timer for the whole dispatch. Every in-flight send races against it; once it fires, every
+  // later race resolves immediately and the `remaining <= 0` check catches adapters not yet started.
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof DEADLINE>((resolve) => {
+    deadlineTimer = setTimeout(() => resolve(DEADLINE), Math.max(0, deadlineAt - now()));
+  });
+
   /** Run one planned adapter to a result row. Returns true on success. */
   const attempt = async (name: ChannelName): Promise<boolean> => {
     const adapter = adapters[name];
@@ -122,7 +133,13 @@ export async function dispatch(
       return false;
     }
     const sendOptions: SendOptions = { timeoutMs: Math.min(perAdapterMs, remaining) };
-    const result = await adapter.send(request.to, request.message, env, sendOptions);
+    const result = await Promise.race([adapter.send(request.to, request.message, env, sendOptions), deadline]);
+    if (result === DEADLINE) {
+      // The adapter is still running; it is abandoned, never awaited. Nothing it returns later
+      // can change the response the phone already has.
+      results.set(name, { channel: name, ok: false, error: DEADLINE_ERROR });
+      return false;
+    }
     results.set(name, result.ok ? { channel: name, ok: true } : { channel: name, ok: false, error: result.error });
     if (result.ok) state.delivered = true;
     return result.ok;
@@ -172,6 +189,7 @@ export async function dispatch(
     await Promise.all([runData(), runSms()]);
   }
 
+  clearTimeout(deadlineTimer);
   return {
     results: plan.map((name) => results.get(name) ?? { channel: name, ok: false, error: SKIPPED_ERROR }),
     delivered: state.delivered,
