@@ -13,8 +13,8 @@ decision: [`docs/decisions/ADR-007-multi-channel-relay.md`](../docs/decisions/AD
 
 | Adapter | Built | Unit tested (mocked `fetch`) | Validated against the real provider |
 | --- | --- | --- | --- |
-| `telegram` | yes | yes | **NO** — not deployed yet |
-| `textbelt` | yes | yes | **NO** — not deployed yet |
+| `telegram` | yes | yes | **YES** — 2026-09-21: deployed at `phc-sos-relay.xreep.workers.dev`; `/start <linkToken>` → `/link` → `/sos` delivered a message to a real Telegram account in ~1 s |
+| `textbelt` | yes | yes | **Tested, blocked for India** — 2026-09-21: Textbelt answered `Sorry, free SMS are disabled for this country due to abuse`; the relay returned 502 as designed (phone falls back to the SMS composer). Paid tier unverified. |
 | `twilio` | yes | yes | **NO** — no credentials; disabled |
 | `fcm` | stub | yes (returns "not implemented") | — (M5 part 2) |
 
